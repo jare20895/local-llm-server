@@ -169,7 +169,8 @@ __pycache__/
 .mypy_cache/
 *.egg-info/
 *.egg
-
+*.whl
+*.whl.1
 # Java / Maven / Gradle
 .gradle/
 *.lock
