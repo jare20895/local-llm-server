@@ -620,6 +620,47 @@ input:checked + .slider:before {
     white-space: nowrap;
 }
 
+/* Version and Update Badges */
+.update-badge {
+    display: inline-block;
+    background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+    color: white;
+    padding: 4px 12px;
+    margin-left: 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 700;
+    white-space: nowrap;
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.7;
+    }
+}
+
+.version-info {
+    background: rgba(102, 126, 234, 0.1);
+    padding: 10px;
+    border-radius: 8px;
+    margin: 10px 0;
+    border-left: 3px solid #667eea;
+}
+
+.btn-success {
+    background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+    color: white;
+}
+
+.btn-success:hover {
+    opacity: 0.9;
+    transform: translateY(-2px);
+}
+
 /* Larger Modal for Metadata Editing */
 .modal-large {
     max-width: 800px;
@@ -651,4 +692,83 @@ input:checked + .slider:before {
 
 ::-webkit-scrollbar-thumb:hover {
     background: var(--text-secondary);
+}
+
+/* Cache Management Styles */
+.cache-stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 20px;
+    margin: 20px 0;
+}
+
+.cache-location-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 20px;
+}
+
+.cache-location-card h4 {
+    margin: 0 0 15px 0;
+    color: var(--text-primary);
+    font-size: 16px;
+    font-weight: 600;
+    padding-bottom: 10px;
+    border-bottom: 2px solid var(--border-color);
+}
+
+.cache-info {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.info-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 14px;
+}
+
+.info-row .label {
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
+.info-row .value {
+    color: var(--text-primary);
+    font-family: 'Courier New', monospace;
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.progress-bar-container {
+    position: relative;
+    width: 150px;
+    height: 20px;
+    background: var(--bg-secondary);
+    border-radius: 10px;
+    overflow: hidden;
+    border: 1px solid var(--border-color);
+}
+
+.progress-bar {
+    height: 100%;
+    background: linear-gradient(90deg, #28a745 0%, #20c997 100%);
+    transition: width 0.3s ease, background-color 0.3s ease;
+    border-radius: 10px 0 0 10px;
+}
+
+.progress-text {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-primary);
+    text-shadow: 0 0 3px rgba(0,0,0,0.3);
 }

@@ -39,7 +39,13 @@ The system consists of three main components:
 
 ### Quick Start (AMD GPU with ROCm)
 
-**For your RX 7900 GRE:** See [QUICKSTART.md](QUICKSTART.md) for the 3-step setup.
+**For AMD GPUs in WSL2:** See [ROCM_SETUP_GUIDE.md](ROCM_SETUP_GUIDE.md) for the complete setup guide covering:
+- Python virtual environment setup
+- Docker environment setup
+- Troubleshooting and diagnostics
+- Environment comparison
+
+**Quick 3-step setup:** See [QUICKSTART.md](QUICKSTART.md)
 
 ```bash
 # Install ROCm PyTorch
@@ -286,9 +292,11 @@ This disables collection of detailed metrics but still returns basic generation 
 - Check database write permissions
 
 **For more help:**
+- **Complete ROCm guide:** [ROCM_SETUP_GUIDE.md](ROCM_SETUP_GUIDE.md) - Comprehensive setup for Python venv and Docker
 - Local setup: [SETUP_LOCAL.md](SETUP_LOCAL.md)
 - Docker setup: [DOCKER.md](DOCKER.md)
 - Quick reference: [QUICKSTART.md](QUICKSTART.md)
+- GPU troubleshooting: [FIX_WSL_GPU.md](FIX_WSL_GPU.md)
 
 ## License
 

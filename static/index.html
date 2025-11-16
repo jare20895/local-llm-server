@@ -209,6 +209,89 @@
                     <button class="btn btn-primary" onclick="validateModel()">Run Validation Test</button>
                     <div id="validation-result" style="margin-top: 15px;"></div>
                 </div>
+
+                <div class="card">
+                    <h3>Cache Management</h3>
+                    <p>Monitor and manage model cache locations to prevent running out of disk space.</p>
+
+                    <div class="cache-stats-grid" id="cache-stats-grid">
+                        <div class="cache-location-card">
+                            <h4>Primary Cache (Fast SSD)</h4>
+                            <div class="cache-info">
+                                <div class="info-row">
+                                    <span class="label">Location:</span>
+                                    <span id="primary-cache-path" class="value">Loading...</span>
+                                </div>
+                                <div class="info-row">
+                                    <span class="label">Used:</span>
+                                    <span id="primary-cache-used" class="value">-</span>
+                                </div>
+                                <div class="info-row">
+                                    <span class="label">Limit:</span>
+                                    <span id="primary-cache-limit" class="value">-</span>
+                                </div>
+                                <div class="info-row">
+                                    <span class="label">Usage:</span>
+                                    <div class="progress-bar-container">
+                                        <div id="primary-cache-bar" class="progress-bar" style="width: 0%"></div>
+                                        <span id="primary-cache-percent" class="progress-text">0%</span>
+                                    </div>
+                                </div>
+                                <div class="info-row">
+                                    <span class="label">Disk Free:</span>
+                                    <span id="primary-disk-free" class="value">-</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="cache-location-card">
+                            <h4>Secondary Cache (Slower Drive)</h4>
+                            <div class="cache-info">
+                                <div class="info-row">
+                                    <span class="label">Location:</span>
+                                    <span id="secondary-cache-path" class="value">Loading...</span>
+                                </div>
+                                <div class="info-row">
+                                    <span class="label">Used:</span>
+                                    <span id="secondary-cache-used" class="value">-</span>
+                                </div>
+                                <div class="info-row">
+                                    <span class="label">Limit:</span>
+                                    <span id="secondary-cache-limit" class="value">-</span>
+                                </div>
+                                <div class="info-row">
+                                    <span class="label">Usage:</span>
+                                    <div class="progress-bar-container">
+                                        <div id="secondary-cache-bar" class="progress-bar" style="width: 0%"></div>
+                                        <span id="secondary-cache-percent" class="progress-text">0%</span>
+                                    </div>
+                                </div>
+                                <div class="info-row">
+                                    <span class="label">Disk Free:</span>
+                                    <span id="secondary-disk-free" class="value">-</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div style="margin-top: 15px;">
+                        <button class="btn btn-primary" onclick="refreshCacheStats()">🔄 Refresh Cache Stats</button>
+                    </div>
+
+                    <div class="info-box" style="margin-top: 15px;">
+                        <strong>Cache Locations:</strong>
+                        <ul>
+                            <li><strong>Primary:</strong> Fast SSD for frequently used models (default: 100GB limit)</li>
+                            <li><strong>Secondary:</strong> Slower drive for infrequently used models (default: 2TB limit)</li>
+                            <li><strong>Custom:</strong> Specify any directory for one-off models</li>
+                        </ul>
+                        <p style="margin-top: 10px;">
+                            Configure cache paths and limits using environment variables:
+                            <code>PRIMARY_CACHE_PATH</code>, <code>PRIMARY_CACHE_LIMIT_GB</code>,
+                            <code>SECONDARY_CACHE_PATH</code>, <code>SECONDARY_CACHE_LIMIT_GB</code>
+                        </p>
+                    </div>
+                </div>
             </div>
         </main>
     </div>
@@ -238,6 +321,33 @@
                         <input type="checkbox" id="trust-remote">
                         Trust Remote Code
                     </label>
+                </div>
+
+                <div class="form-group">
+                    <label for="cache-location">Cache Location</label>
+                    <select id="cache-location" onchange="toggleCustomCachePath()">
+                        <option value="primary">Primary (Fast SSD)</option>
+                        <option value="secondary">Secondary (Slower Drive)</option>
+                        <option value="custom">Custom Path</option>
+                    </select>
+                </div>
+
+                <div class="form-group" id="custom-cache-path-group" style="display: none;">
+                    <label for="cache-path">Custom Cache Path</label>
+                    <input type="text" id="cache-path"
+                        placeholder="/path/to/custom/cache">
+                    <small>Full filesystem path where model files will be stored</small>
+                </div>
+
+                <div class="form-group">
+                    <label for="estimated-size">Estimated Model Size (MB)</label>
+                    <input type="number" id="estimated-size" value="5000" min="100" step="100">
+                    <small>Estimated size for space checking (default: 5GB)</small>
+                </div>
+
+                <div id="cache-warning" class="info-box" style="display: none; margin-top: 10px;">
+                    <strong>⚠️ Warning:</strong>
+                    <span id="cache-warning-text"></span>
                 </div>
 
                 <div class="modal-footer">

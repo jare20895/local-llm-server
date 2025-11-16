@@ -39,6 +39,8 @@ function switchTab(tabName) {
         loadModels();
     } else if (tabName === 'analytics') {
         loadModelListForAnalytics();
+    } else if (tabName === 'settings') {
+        refreshCacheStats();
     }
 }
 
@@ -156,8 +158,18 @@ function createModelCard(model) {
         ` : ''}
         <p><strong>Total Loads:</strong> ${model.total_loads || 0} | <strong>Inferences:</strong> ${model.total_inferences || 0}</p>
         <p><strong>Last Loaded:</strong> ${formatDate(model.last_loaded)}</p>
+        ${model.current_commit ? `
+            <div class="model-section version-info">
+                <strong>📦 Version:</strong>
+                <span class="metric-badge">${model.current_commit.substring(0, 8)}</span>
+                ${model.last_updated ? `<span style="font-size: 0.85em; color: #888;">Updated: ${formatDate(model.last_updated)}</span>` : ''}
+                ${model.update_available ? '<span class="update-badge">Update Available!</span>' : ''}
+            </div>
+        ` : ''}
         <div class="model-card-actions">
             <button class="btn btn-primary" onclick="loadModelToMemory('${model.model_name}')">Load</button>
+            <button class="btn btn-secondary" onclick="checkForUpdates('${model.model_name}')">🔄 Check Updates</button>
+            ${model.update_available ? `<button class="btn btn-success" onclick="updateModel('${model.model_name}')">⬆️ Update</button>` : ''}
             <button class="btn btn-secondary" onclick="showEditMetadataModal('${model.model_name}')">Edit Metrics</button>
             <button class="btn btn-danger" onclick="deleteModel('${model.model_name}')">Delete</button>
         </div>
@@ -233,6 +245,77 @@ async function deleteModel(modelName) {
     }
 }
 
+// Model Update Functions
+async function checkForUpdates(modelName) {
+    try {
+        const response = await fetch(`${API_BASE}/api/models/${modelName}/updates`);
+        const data = await response.json();
+
+        if (response.ok) {
+            if (data.update_available) {
+                const message = `Update available for "${modelName}"!\n\n` +
+                              `Current version: ${data.local_commit ? data.local_commit.substring(0, 8) : 'Unknown'}\n` +
+                              `Latest version: ${data.remote_commit.substring(0, 8)}\n` +
+                              `Last modified: ${new Date(data.last_modified).toLocaleString()}\n\n` +
+                              `Click "Update" button to download the latest version.`;
+                alert(message);
+            } else {
+                alert(`"${modelName}" is up to date!\n\nVersion: ${data.local_commit ? data.local_commit.substring(0, 8) : 'Unknown'}`);
+            }
+            // Refresh models list to show update badge if needed
+            loadModels();
+        } else {
+            alert(`Failed to check for updates: ${data.detail}`);
+        }
+    } catch (error) {
+        alert(`Error checking for updates: ${error.message}`);
+    }
+}
+
+async function updateModel(modelName) {
+    if (!confirm(`Update "${modelName}" to the latest version?\n\nThis will download new/changed files and clean up old blobs. The model must not be loaded.`)) {
+        return;
+    }
+
+    try {
+        // Show loading indicator
+        const statusText = document.getElementById('status-text');
+        const originalText = statusText.textContent;
+        statusText.textContent = `Updating ${modelName}...`;
+
+        const response = await fetch(`${API_BASE}/api/models/${modelName}/update`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ garbage_collect: true })
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+            let message = `✅ "${modelName}" updated successfully!\n\n`;
+            message += `Old version: ${data.old_commit ? data.old_commit.substring(0, 8) : 'Unknown'}\n`;
+            message += `New version: ${data.new_commit.substring(0, 8)}\n`;
+
+            if (data.garbage_collection) {
+                message += `\n🧹 Cleaned up ${data.garbage_collection.deleted_blobs} orphaned blobs`;
+                message += `\n💾 Freed ${data.garbage_collection.freed_mb.toFixed(1)} MB`;
+            }
+
+            alert(message);
+            loadModels();
+        } else {
+            alert(`Failed to update model: ${data.detail}`);
+        }
+
+        // Restore status text
+        statusText.textContent = originalText;
+
+    } catch (error) {
+        alert(`Error updating model: ${error.message}`);
+        document.getElementById('status-text').textContent = 'No model loaded';
+    }
+}
+
 // Model Registration
 function showRegisterModal() {
     document.getElementById('register-modal').classList.add('active');
@@ -246,11 +329,24 @@ function closeRegisterModal() {
 async function registerModel(event) {
     event.preventDefault();
 
+    const cacheLocation = document.getElementById('cache-location').value;
     const formData = {
         model_name: document.getElementById('model-name').value,
         hf_path: document.getElementById('hf-path').value,
-        trust_remote_code: document.getElementById('trust-remote').checked
+        trust_remote_code: document.getElementById('trust-remote').checked,
+        cache_location: cacheLocation,
+        estimated_size_mb: parseInt(document.getElementById('estimated-size').value) || 5000
     };
+
+    // Add cache_path if custom location is selected
+    if (cacheLocation === 'custom') {
+        const cachePath = document.getElementById('cache-path').value;
+        if (!cachePath) {
+            alert('Please specify a custom cache path');
+            return;
+        }
+        formData.cache_path = cachePath;
+    }
 
     try {
         const response = await fetch(`${API_BASE}/api/models`, {
@@ -704,5 +800,121 @@ async function updateModelMetadata(event) {
         }
     } catch (error) {
         alert(`Error updating metadata: ${error.message}`);
+    }
+}
+
+
+// ===========================================================================
+// Cache Management Functions
+// ===========================================================================
+
+function toggleCustomCachePath() {
+    const cacheLocation = document.getElementById('cache-location').value;
+    const customPathGroup = document.getElementById('custom-cache-path-group');
+
+    if (cacheLocation === 'custom') {
+        customPathGroup.style.display = 'block';
+    } else {
+        customPathGroup.style.display = 'none';
+    }
+
+    // Check cache space and show warning if needed
+    checkCacheSpaceWarning();
+}
+
+async function checkCacheSpaceWarning() {
+    const cacheLocation = document.getElementById('cache-location').value;
+    const estimatedSize = parseInt(document.getElementById('estimated-size').value) || 5000;
+
+    try {
+        const response = await fetch(
+            `${API_BASE}/api/cache/check?cache_location=${cacheLocation}&required_space_mb=${estimatedSize}`,
+            { method: 'POST' }
+        );
+        const data = await response.json();
+
+        const warningBox = document.getElementById('cache-warning');
+        const warningText = document.getElementById('cache-warning-text');
+
+        if (!data.sufficient) {
+            warningBox.style.display = 'block';
+            warningBox.style.borderColor = '#dc3545';
+            warningText.textContent = `Insufficient space in ${cacheLocation} cache. ` +
+                `Available: ${data.disk_free_gb?.toFixed(1)}GB, ` +
+                `Required: ~${(estimatedSize / 1024).toFixed(1)}GB. ` +
+                `Consider using a different cache location.`;
+        } else if (data.warning) {
+            warningBox.style.display = 'block';
+            warningBox.style.borderColor = '#ffc107';
+            warningText.textContent = `Cache usage will be at ${data.usage_percent?.toFixed(0)}% ` +
+                `after downloading this model. Consider using secondary cache.`;
+        } else {
+            warningBox.style.display = 'none';
+        }
+    } catch (error) {
+        console.error('Error checking cache space:', error);
+    }
+}
+
+async function refreshCacheStats() {
+    try {
+        const response = await fetch(`${API_BASE}/api/cache/stats`);
+        const data = await response.json();
+
+        updateCacheDisplay('primary', data.primary);
+        updateCacheDisplay('secondary', data.secondary);
+    } catch (error) {
+        console.error('Failed to refresh cache stats:', error);
+    }
+}
+
+function updateCacheDisplay(cacheType, cacheData) {
+    if (!cacheData || !cacheData.path) {
+        return;
+    }
+
+    const prefix = cacheType === 'primary' ? 'primary' : 'secondary';
+
+    // Update path
+    const pathEl = document.getElementById(`${prefix}-cache-path`);
+    if (pathEl) {
+        pathEl.textContent = cacheData.path;
+        pathEl.title = cacheData.path; // Show full path on hover
+    }
+
+    // Update used
+    const usedEl = document.getElementById(`${prefix}-cache-used`);
+    if (usedEl) {
+        usedEl.textContent = cacheData.used || '-';
+    }
+
+    // Update limit
+    const limitEl = document.getElementById(`${prefix}-cache-limit`);
+    if (limitEl) {
+        limitEl.textContent = cacheData.limit || '-';
+    }
+
+    // Update progress bar
+    const barEl = document.getElementById(`${prefix}-cache-bar`);
+    const percentEl = document.getElementById(`${prefix}-cache-percent`);
+    if (barEl && percentEl) {
+        const usage = cacheData.usage_percent || 0;
+        barEl.style.width = `${Math.min(usage, 100)}%`;
+        percentEl.textContent = `${usage.toFixed(1)}%`;
+
+        // Color based on usage
+        if (usage >= 90) {
+            barEl.style.backgroundColor = '#dc3545'; // Red
+        } else if (usage >= 75) {
+            barEl.style.backgroundColor = '#ffc107'; // Yellow
+        } else {
+            barEl.style.backgroundColor = '#28a745'; // Green
+        }
+    }
+
+    // Update disk free
+    const freeEl = document.getElementById(`${prefix}-disk-free`);
+    if (freeEl) {
+        freeEl.textContent = cacheData.disk_free || '-';
     }
 }

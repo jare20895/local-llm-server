@@ -15,11 +15,17 @@ services:
     volumes:
       # Persistent SQLite database
       - ./data:/app/data
+      # Hugging Face cache for models (bind mount for easy access)
+      - ./hf-cache:/root/.cache/huggingface
+      # Secondary cache on Z: drive (for large/infrequent models)
+      - /mnt/z/llm-models-cache:/mnt/z/llm-models-cache
       # WSL GPU libraries (CRITICAL for GPU detection in Docker)
       - /usr/lib/wsl/lib/libdxcore.so:/usr/lib/libdxcore.so
       - /opt/rocm/lib/libhsa-runtime64.so.1:/opt/rocm/lib/libhsa-runtime64.so.1
-      # Hugging Face cache for models
-      - hf-cache:/root/.cache/huggingface
+
+    # Load environment variables from .env file
+    env_file:
+      - .env
 
     environment:
       # ROCm environment variables
@@ -31,7 +37,10 @@ services:
       - PYTORCH_HIP_ALLOC_CONF=garbage_collection_threshold:0.6,max_split_size_mb:128
       # Hugging Face settings
       - HF_HOME=/root/.cache/huggingface
+      - PRIMARY_CACHE_PATH=/root/.cache/huggingface
       - TRANSFORMERS_CACHE=/root/.cache/huggingface/transformers
+      # Database path
+      - DATABASE_PATH=/app/data/models.db
       # Optional: Hugging Face token
       # - HF_TOKEN=your_token_here
 
@@ -44,7 +53,3 @@ services:
     shm_size: 8G  # AMD recommended for ROCm
     stdin_open: true
     tty: true
-
-volumes:
-  hf-cache:
-    driver: local

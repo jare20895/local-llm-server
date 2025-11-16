@@ -20,13 +20,20 @@ from pydantic import BaseModel, Field, ConfigDict
 from database import (
     ModelRegistry,
     PerformanceLog,
+    CacheLocation,
     engine,
     create_db_and_tables,
     get_gpu_metrics,
     get_system_metrics,
     hash_prompt,
     detect_repetition,
+    get_cache_config,
+    check_cache_space,
+    get_directory_size,
 )
+
+# --- Cache Management ---
+from cache_manager import CacheManager
 
 
 # --- Global State: The Model Manager ---
@@ -41,23 +48,37 @@ class ModelManager:
         self.performance_logging: bool = True  # On by default
 
     def load(
-        self, hf_path: str, model_name: str, model_id: int, trust_remote_code: bool
+        self, hf_path: str, model_name: str, model_id: int, trust_remote_code: bool,
+        cache_dir: Optional[str] = None
     ):
-        """Load a model into VRAM."""
+        """Load a model into VRAM from specified cache location."""
         # 1. Unload any previous model
         self.unload()
 
-        print(f"🔄 Loading model: {model_name} from {hf_path}...")
+        cache_info = f" (cache: {cache_dir})" if cache_dir else ""
+        print(f"🔄 Loading model: {model_name} from {hf_path}{cache_info}...")
         try:
             dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+
+            # Load model with custom cache directory if specified
+            load_kwargs = {
+                "torch_dtype": dtype,
+                "device_map": "auto",
+                "trust_remote_code": trust_remote_code,
+            }
+
+            if cache_dir:
+                # Set cache directory for HuggingFace transformers
+                load_kwargs["cache_dir"] = cache_dir
+
             self.model = AutoModelForCausalLM.from_pretrained(
                 hf_path,
-                torch_dtype=dtype,
-                device_map="auto",
-                trust_remote_code=trust_remote_code,
+                **load_kwargs
             )
             self.tokenizer = AutoTokenizer.from_pretrained(
-                hf_path, trust_remote_code=trust_remote_code
+                hf_path,
+                trust_remote_code=trust_remote_code,
+                cache_dir=cache_dir if cache_dir else None
             )
             self.loaded_model_name = model_name
             self.loaded_model_id = model_id
@@ -127,6 +148,15 @@ class ModelCreateRequest(BaseModel):
     trust_remote_code: bool = Field(
         default=False, description="Whether to trust remote code"
     )
+    cache_location: str = Field(
+        default="primary", description="Cache location: primary, secondary, or custom"
+    )
+    cache_path: Optional[str] = Field(
+        default=None, description="Custom cache path (required if cache_location is 'custom')"
+    )
+    estimated_size_mb: Optional[float] = Field(
+        default=5000, description="Estimated model size in MB for space checking"
+    )
 
 
 class ModelLoadRequest(BaseModel):
@@ -174,6 +204,11 @@ class ModelResponse(BaseModel):
     hf_path: str
     trust_remote_code: bool
     created_at: datetime
+
+    # Cache location
+    cache_location: str = "primary"
+    cache_path: Optional[str] = None
+    model_size_mb: Optional[float] = None
 
     # Model metadata
     parameter_count: Optional[int] = None
@@ -231,15 +266,21 @@ class PerformanceStatsResponse(BaseModel):
     avg_cpu_mem_mb: Optional[float] = None
 
 
+# --- Global Cache Manager Instance ---
+cache_manager = CacheManager(check_interval=300)  # Check every 5 minutes
+
+
 # --- Lifespan Context Manager ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Handle startup and shutdown events."""
     # Startup
     create_db_and_tables()
+    cache_manager.start_monitoring()
     print("🚀 Homelab LLM Server started")
     yield
-    # Shutdown (if needed in the future)
+    # Shutdown
+    cache_manager.stop_monitoring()
 
 
 # --- FastAPI App Setup ---
@@ -297,11 +338,47 @@ def register_model(
             detail=f"Model '{request.model_name}' already registered",
         )
 
+    # Validate cache location
+    if request.cache_location not in ["primary", "secondary", "custom"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid cache_location: {request.cache_location}. Must be 'primary', 'secondary', or 'custom'"
+        )
+
+    if request.cache_location == "custom" and not request.cache_path:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="cache_path is required when cache_location is 'custom'"
+        )
+
+    # Check if cache has sufficient space
+    space_check = cache_manager.check_space_for_model(
+        request.cache_location,
+        request.estimated_size_mb or 5000
+    )
+
+    if not space_check["sufficient"]:
+        raise HTTPException(
+            status_code=status.HTTP_507_INSUFFICIENT_STORAGE,
+            detail=f"Insufficient space in {request.cache_location} cache. "
+                   f"Available: {space_check.get('disk_free_gb', 0):.1f}GB, "
+                   f"Required: ~{(request.estimated_size_mb or 5000)/1024:.1f}GB. "
+                   f"Consider using a different cache location."
+        )
+
+    # Get actual cache path
+    actual_cache_path = cache_manager.get_cache_path(
+        request.cache_location,
+        request.cache_path
+    )
+
     # Create new registry entry
     new_model = ModelRegistry(
         model_name=request.model_name,
         hf_path=request.hf_path,
         trust_remote_code=request.trust_remote_code,
+        cache_location=request.cache_location,
+        cache_path=actual_cache_path,
     )
     session.add(new_model)
     session.commit()
@@ -351,8 +428,18 @@ def update_model_metadata(
 
 
 @app.delete("/api/models/{model_name}", tags=["Model Registry"])
-def delete_model(model_name: str, session: Session = Depends(get_db_session)):
-    """Delete a model from the registry."""
+def delete_model(
+    model_name: str,
+    delete_files: bool = False,
+    session: Session = Depends(get_db_session)
+):
+    """
+    Delete a model from the registry.
+
+    Args:
+        model_name: Name of the model to delete
+        delete_files: If True, also delete model files from disk (default: False)
+    """
     model = session.exec(
         select(ModelRegistry).where(ModelRegistry.model_name == model_name)
     ).first()
@@ -370,10 +457,220 @@ def delete_model(model_name: str, session: Session = Depends(get_db_session)):
             detail=f"Cannot delete '{model_name}' - it is currently loaded. Unload it first.",
         )
 
+    # Delete from database
+    hf_path = model.hf_path
+    cache_path = model.cache_path
     session.delete(model)
     session.commit()
 
-    return {"message": f"Model '{model_name}' deleted successfully"}
+    result = {"message": f"Model '{model_name}' deleted from registry"}
+
+    # Optionally delete files from disk
+    if delete_files and cache_path:
+        import shutil
+
+        # Construct the model directory path
+        # HuggingFace stores models as: cache_path/hub/models--org--model/
+        org_model = hf_path.replace("/", "--")
+        model_dir = os.path.join(cache_path, "hub", f"models--{org_model}")
+
+        if os.path.exists(model_dir):
+            try:
+                # Get size before deletion for reporting
+                size_mb = get_directory_size(model_dir)
+
+                # Delete the directory
+                shutil.rmtree(model_dir)
+
+                result["message"] += f" and files deleted from disk"
+                result["freed_space_mb"] = size_mb
+                result["deleted_path"] = model_dir
+
+                print(f"🗑️  Deleted model files: {model_dir} ({size_mb:.1f} MB freed)")
+            except Exception as e:
+                result["message"] += f" but failed to delete files: {str(e)}"
+                result["error"] = str(e)
+        else:
+            result["message"] += " (no files found on disk)"
+            result["warning"] = f"Model directory not found: {model_dir}"
+
+    return result
+
+
+@app.get("/api/models/{model_name}/updates", tags=["Model Registry"])
+def check_for_updates(
+    model_name: str,
+    session: Session = Depends(get_db_session)
+):
+    """
+    Check if a model has updates available on HuggingFace Hub.
+
+    Returns:
+        update_available: bool
+        local_commit: current commit hash
+        remote_commit: latest commit hash
+        version info and last modified date
+    """
+    from database import check_model_update_available
+
+    model = session.exec(
+        select(ModelRegistry).where(ModelRegistry.model_name == model_name)
+    ).first()
+
+    if not model:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Model '{model_name}' not found",
+        )
+
+    if not model.cache_path:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Model '{model_name}' has no cache path - cannot check for updates",
+        )
+
+    # Check for updates
+    update_info = check_model_update_available(
+        hf_path=model.hf_path,
+        cache_path=model.cache_path,
+        token=os.getenv("HF_TOKEN")
+    )
+
+    if not update_info.get("success"):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to check for updates: {update_info.get('error')}",
+        )
+
+    # Update cache in database
+    model.update_available = update_info["update_available"]
+    model.last_update_check = datetime.now()
+    if not model.current_commit and update_info.get("local_commit"):
+        model.current_commit = update_info["local_commit"]
+
+    session.add(model)
+    session.commit()
+
+    return {
+        "model_name": model_name,
+        "update_available": update_info["update_available"],
+        "local_commit": update_info.get("local_commit"),
+        "remote_commit": update_info.get("remote_commit"),
+        "remote_version": update_info.get("remote_version"),
+        "last_modified": update_info.get("last_modified"),
+        "checked_at": datetime.now().isoformat()
+    }
+
+
+@app.post("/api/models/{model_name}/update", tags=["Model Registry"])
+def update_model(
+    model_name: str,
+    garbage_collect: bool = True,
+    session: Session = Depends(get_db_session)
+):
+    """
+    Update a model to the latest version from HuggingFace Hub.
+
+    Args:
+        model_name: Name of the model to update
+        garbage_collect: If True, clean up old blobs after update (default: True)
+
+    Note:
+        - HuggingFace automatically reuses unchanged blobs
+        - Only new/changed files are downloaded
+        - Old snapshots are kept unless garbage_collect=True
+    """
+    from database import get_local_model_commit, garbage_collect_model_blobs
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    model = session.exec(
+        select(ModelRegistry).where(ModelRegistry.model_name == model_name)
+    ).first()
+
+    if not model:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Model '{model_name}' not found",
+        )
+
+    # Check if model is currently loaded
+    if model_manager.loaded_model_name == model_name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot update '{model_name}' - it is currently loaded. Unload it first.",
+        )
+
+    if not model.cache_path:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Model '{model_name}' has no cache path",
+        )
+
+    # Get current version before update
+    old_commit = get_local_model_commit(model.hf_path, model.cache_path)
+
+    try:
+        # Download latest version (HuggingFace reuses unchanged blobs automatically)
+        print(f"📥 Downloading latest version of {model.hf_path}...")
+
+        # Download model and tokenizer
+        AutoModelForCausalLM.from_pretrained(
+            model.hf_path,
+            cache_dir=model.cache_path,
+            trust_remote_code=model.trust_remote_code,
+            revision="main",  # Always get latest
+            # Don't load into memory, just download
+            low_cpu_mem_usage=True
+        )
+
+        AutoTokenizer.from_pretrained(
+            model.hf_path,
+            cache_dir=model.cache_path,
+            trust_remote_code=model.trust_remote_code,
+            revision="main"
+        )
+
+        # Get new version
+        new_commit = get_local_model_commit(model.hf_path, model.cache_path)
+
+        # Update model record
+        model.current_commit = new_commit
+        model.last_updated = datetime.now()
+        model.update_available = False
+
+        session.add(model)
+        session.commit()
+
+        result = {
+            "message": f"Model '{model_name}' updated successfully",
+            "old_commit": old_commit,
+            "new_commit": new_commit,
+            "updated_at": datetime.now().isoformat()
+        }
+
+        # Garbage collect old blobs if requested
+        if garbage_collect:
+            print(f"🧹 Cleaning up orphaned blobs...")
+            gc_result = garbage_collect_model_blobs(model.hf_path, model.cache_path)
+
+            if gc_result.get("success"):
+                result["garbage_collection"] = {
+                    "deleted_blobs": gc_result["deleted_count"],
+                    "freed_mb": gc_result["freed_mb"],
+                    "total_blobs": gc_result["total_blobs"],
+                    "referenced_blobs": gc_result["referenced_blobs"]
+                }
+                print(f"🗑️  Deleted {gc_result['deleted_count']} orphaned blobs ({gc_result['freed_mb']:.1f} MB freed)")
+            else:
+                result["garbage_collection_error"] = gc_result.get("error")
+
+        return result
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update model: {str(e)}",
+        )
 
 
 # ===== Group 2: Orchestration (State Ops) =====
@@ -413,13 +710,14 @@ def load_model(request: ModelLoadRequest, session: Session = Depends(get_db_sess
             detail=f"Model '{request.model_name}' not found in registry. Register it first.",
         )
 
-    # Load the model
+    # Load the model with cache location
     try:
         model_manager.load(
             hf_path=model.hf_path,
             model_name=model.model_name,
             model_id=model.id,
             trust_remote_code=model.trust_remote_code,
+            cache_dir=model.cache_path,
         )
 
         # Update model metadata in registry
@@ -447,6 +745,21 @@ def load_model(request: ModelLoadRequest, session: Session = Depends(get_db_sess
 
             # Get dtype
             model.default_dtype = str(next(model_manager.model.parameters()).dtype)
+
+            # Calculate actual model size on disk (if not already set)
+            if not model.model_size_mb and model.cache_path:
+                model_size_mb = get_directory_size(model.cache_path)
+                model.model_size_mb = model_size_mb
+
+            # Capture version information if not already set
+            if not model.current_commit and model.cache_path:
+                from database import get_local_model_commit
+                commit = get_local_model_commit(model.hf_path, model.cache_path)
+                if commit:
+                    model.current_commit = commit
+                    model.current_version = "main"  # Default to main branch
+                    if not model.last_updated:
+                        model.last_updated = datetime.now()
 
         except Exception as e:
             print(f"Warning: Could not collect full model metadata: {e}")
@@ -643,6 +956,7 @@ def generate_text(
         # Save comprehensive log to database
         log_entry = PerformanceLog(
             model_registry_id=model_manager.loaded_model_id,
+            model_version=model_record.current_commit if model_record else None,
             # Token metrics
             input_tokens=input_length,
             output_tokens=output_length,
@@ -941,6 +1255,192 @@ def get_performance_logs(
     logs = session.exec(statement).all()
 
     return {"model_name": model_name, "logs": logs, "count": len(logs)}
+
+
+# ===== Group 6: Cache Management =====
+
+
+@app.get("/api/cache/orphaned", tags=["Cache Management"])
+def find_orphaned_models(session: Session = Depends(get_db_session)):
+    """
+    Find model files on disk that are not in the database (orphaned models).
+
+    Returns:
+        List of orphaned model directories that can be safely deleted
+    """
+    config = get_cache_config()
+    orphaned = []
+
+    for cache_type in ["primary", "secondary"]:
+        cache_path = config["primary_path"] if cache_type == "primary" else config["secondary_path"]
+        hub_path = os.path.join(cache_path, "hub")
+
+        if not os.path.exists(hub_path):
+            continue
+
+        # List all model directories
+        try:
+            for item in os.listdir(hub_path):
+                if item.startswith("models--"):
+                    model_dir = os.path.join(hub_path, item)
+
+                    # Extract org and model name
+                    # Format: models--org--model
+                    parts = item.replace("models--", "").split("--")
+                    if len(parts) >= 2:
+                        hf_path = "/".join(parts)  # org/model
+
+                        # Check if this model exists in database
+                        db_model = session.exec(
+                            select(ModelRegistry).where(ModelRegistry.hf_path == hf_path)
+                        ).first()
+
+                        if not db_model:
+                            # Orphaned - not in database
+                            size_mb = get_directory_size(model_dir)
+                            orphaned.append({
+                                "hf_path": hf_path,
+                                "directory": model_dir,
+                                "cache_type": cache_type,
+                                "size_mb": size_mb,
+                                "size_gb": size_mb / 1024
+                            })
+        except Exception as e:
+            print(f"Error scanning {hub_path}: {e}")
+
+    return {
+        "orphaned_models": orphaned,
+        "count": len(orphaned),
+        "total_size_mb": sum(m["size_mb"] for m in orphaned),
+        "total_size_gb": sum(m["size_gb"] for m in orphaned)
+    }
+
+
+@app.post("/api/cache/cleanup", tags=["Cache Management"])
+def cleanup_orphaned_models(
+    hf_paths: List[str],
+    session: Session = Depends(get_db_session)
+):
+    """
+    Delete orphaned model files from disk.
+
+    Args:
+        hf_paths: List of HuggingFace paths to delete (e.g., ["Qwen/Qwen2.5-3B-Instruct"])
+
+    Returns:
+        Summary of deleted files
+    """
+    import shutil
+
+    config = get_cache_config()
+    deleted = []
+    errors = []
+
+    for hf_path in hf_paths:
+        # Check database to ensure it's actually orphaned
+        db_model = session.exec(
+            select(ModelRegistry).where(ModelRegistry.hf_path == hf_path)
+        ).first()
+
+        if db_model:
+            errors.append({
+                "hf_path": hf_path,
+                "error": "Model exists in database - use DELETE /api/models/{name} instead"
+            })
+            continue
+
+        # Try both caches
+        org_model = hf_path.replace("/", "--")
+        deleted_from_cache = False
+
+        for cache_type in ["primary", "secondary"]:
+            cache_path = config["primary_path"] if cache_type == "primary" else config["secondary_path"]
+            model_dir = os.path.join(cache_path, "hub", f"models--{org_model}")
+
+            if os.path.exists(model_dir):
+                try:
+                    size_mb = get_directory_size(model_dir)
+                    shutil.rmtree(model_dir)
+                    deleted.append({
+                        "hf_path": hf_path,
+                        "directory": model_dir,
+                        "cache_type": cache_type,
+                        "freed_space_mb": size_mb
+                    })
+                    deleted_from_cache = True
+                    print(f"🗑️  Cleaned up orphaned model: {model_dir} ({size_mb:.1f} MB)")
+                except Exception as e:
+                    errors.append({
+                        "hf_path": hf_path,
+                        "directory": model_dir,
+                        "error": str(e)
+                    })
+
+        if not deleted_from_cache:
+            errors.append({
+                "hf_path": hf_path,
+                "error": "Model directory not found in any cache"
+            })
+
+    return {
+        "deleted": deleted,
+        "deleted_count": len(deleted),
+        "total_freed_mb": sum(d["freed_space_mb"] for d in deleted),
+        "errors": errors,
+        "error_count": len(errors)
+    }
+
+
+@app.get("/api/cache/stats", tags=["Cache Management"])
+def get_cache_stats():
+    """Get current cache statistics for all cache locations."""
+    summary = cache_manager.get_cache_summary()
+    return summary
+
+
+@app.get("/api/cache/config", tags=["Cache Management"])
+def get_cache_config_endpoint():
+    """Get cache configuration settings."""
+    config = get_cache_config()
+    return config
+
+
+@app.post("/api/cache/check", tags=["Cache Management"])
+def check_cache_space_endpoint(
+    cache_location: str = "primary",
+    required_space_mb: float = 0
+):
+    """
+    Check if cache location has sufficient space for a model.
+
+    Args:
+        cache_location: "primary", "secondary", or "custom"
+        required_space_mb: Required space in MB (e.g., estimated model size)
+
+    Returns:
+        Space availability information
+    """
+    space_info = cache_manager.check_space_for_model(cache_location, required_space_mb)
+    return space_info
+
+
+@app.get("/api/cache/recommend", tags=["Cache Management"])
+def get_recommended_cache(estimated_size_mb: float = 5000):
+    """
+    Get recommended cache location based on available space.
+
+    Args:
+        estimated_size_mb: Estimated model size in MB
+
+    Returns:
+        Recommended cache location ("primary" or "secondary")
+    """
+    recommended = cache_manager.get_recommended_cache(estimated_size_mb)
+    return {
+        "recommended_cache": recommended,
+        "estimated_size_mb": estimated_size_mb,
+        "estimated_size_gb": estimated_size_mb / 1024,
+    }
 
 
 # ===== Health Check =====

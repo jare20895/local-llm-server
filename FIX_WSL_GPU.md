@@ -4,7 +4,22 @@
 GPU worked in WSL → Installed Docker Desktop → Display issues → Reinstalled AMD drivers → WSL GPU broken
 
 ## Root Cause
-AMD driver reinstall didn't properly configure WSL GPU passthrough. The compute drivers (amdgpu module) aren't loading in WSL kernel.
+The issue has **TWO critical components**:
+
+### 1. Wrong PyTorch Wheel Source (PRIMARY ISSUE)
+- **Problem:** Using PyTorch.org wheels instead of AMD-recommended repo.radeon.com wheels
+- **Impact:** PyTorch.org wheels don't include all WSL compatibility fixes
+- **Solution:** Must use official AMD wheels from repo.radeon.com
+
+AMD specifically states:
+> "AMD recommends proceeding with ROCm WHLs available at repo.radeon.com. The ROCm WHLs available at PyTorch.org are not tested extensively by AMD as the WHLs change regularly when the nightly builds are updated."
+
+### 2. WSL Runtime Library Conflict
+- **Problem:** PyTorch's bundled `libhsa-runtime64.so` conflicts with WSL's GPU passthrough
+- **Impact:** Even with correct wheels, GPU won't be detected without removing this library
+- **Solution:** Remove bundled library to use host system's HSA runtime
+
+**Note:** While the amdgpu module status can indicate GPU issues, the primary problem is using the wrong PyTorch wheels and not applying the WSL runtime library fix.
 
 ## Solution
 
@@ -48,10 +63,10 @@ ls -la /dev/dxg
 rocminfo | grep "Marketing Name"
 # Should show: AMD Radeon RX 7900 GRE
 
-# THIS IS THE KEY TEST - Check if amdgpu module loads
+# Optional: Check if amdgpu module loads (informational, not critical)
 lsmod | grep amdgpu
-# Should show amdgpu module (if working)
-# If empty, drivers aren't passing through
+# May be empty in WSL2 - this is normal and not the primary issue
+# GPU can work via DirectX passthrough without amdgpu module
 ```
 
 #### 6. Fix Permissions
@@ -59,21 +74,45 @@ lsmod | grep amdgpu
 sudo chmod 666 /dev/dxg
 ```
 
-#### 7. Install Correct PyTorch Version
+#### 7. Install Correct PyTorch Version (AMD Wheels)
+
+**CRITICAL:** Use AMD-recommended wheels from repo.radeon.com, NOT pytorch.org!
+
 ```bash
 cd /home/jare16/LLM
 source venv/bin/activate
 
-# Install ROCm 6.4 PyTorch (better compatibility with RX 7900 GRE)
-pip uninstall -y torch torchvision torchaudio
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.4
+# Option A: Automated (Recommended)
+./setup_rocm.sh
+
+# Option B: Manual AMD Wheel Installation
+pip uninstall -y torch torchvision torchaudio pytorch-triton-rocm
+
+# Download AMD wheels (Python 3.12, ROCm 6.4.2)
+wget https://repo.radeon.com/rocm/manylinux/rocm-rel-6.4.2/torch-2.6.0%2Brocm6.4.2.git76481f7c-cp312-cp312-linux_x86_64.whl
+wget https://repo.radeon.com/rocm/manylinux/rocm-rel-6.4.2/torchvision-0.21.0%2Brocm6.4.2.git4040d51f-cp312-cp312-linux_x86_64.whl
+wget https://repo.radeon.com/rocm/manylinux/rocm-rel-6.4.2/torchaudio-2.6.0%2Brocm6.4.2.gitd8831425-cp312-cp312-linux_x86_64.whl
+wget https://repo.radeon.com/rocm/manylinux/rocm-rel-6.4.2/pytorch_triton_rocm-3.2.0%2Brocm6.4.2.git7e948ebf-cp312-cp312-linux_x86_64.whl
+
+# Install AMD wheels
+pip install torch-2.6.0+rocm6.4.2.git76481f7c-cp312-cp312-linux_x86_64.whl \
+            torchvision-0.21.0+rocm6.4.2.git4040d51f-cp312-cp312-linux_x86_64.whl \
+            torchaudio-2.6.0+rocm6.4.2.gitd8831425-cp312-cp312-linux_x86_64.whl \
+            pytorch_triton_rocm-3.2.0+rocm6.4.2.git7e948ebf-cp312-cp312-linux_x86_64.whl
+
+# CRITICAL WSL FIX: Remove bundled libhsa-runtime64.so
+location=$(pip show torch | grep Location | awk -F ": " '{print $2}')
+rm -f ${location}/torch/lib/libhsa-runtime64.so*
 
 # Test GPU
-export HSA_OVERRIDE_GFX_VERSION=11.0.0
 python verify_gpu.py
 ```
 
-**Note:** ROCm 6.4 has better WSL compatibility than 6.2 for RX 7900 series.
+**Why AMD wheels matter:**
+- ✅ Tested by AMD specifically for WSL environments
+- ✅ Include WSL-specific compatibility fixes
+- ✅ More stable and reliable for RX 7900 series
+- ❌ PyTorch.org wheels are untested by AMD and may not work in WSL
 
 ## Alternative: WSL-Specific ROCm Setup
 
@@ -110,10 +149,10 @@ wsl --shutdown
 3. **Kernel Module**: WSL kernel may not include amdgpu module
 4. **Docker Desktop Conflicts**: Docker Desktop can interfere with GPU passthrough
 
-### Current Status
+### Current Status (Before Fix)
 - ✅ **rocminfo works** - HSA can detect GPU
-- ❌ **PyTorch can't use GPU** - Compute drivers not initialized
-- ❌ **amdgpu module missing** - Kernel driver not loaded
+- ❌ **PyTorch can't use GPU** - Wrong wheel source or missing WSL fix
+- ⚠️  **amdgpu module may be missing** - Not the primary issue, symptom of driver passthrough limitations
 
 ## Workarounds
 
@@ -151,33 +190,40 @@ ls -la /dev/dxg
 # HSA layer works
 rocminfo | grep -i "marketing name"
 
-# Kernel module loaded (KEY!)
+# Kernel module loaded (informational, not required)
 lsmod | grep amdgpu
 
-# PyTorch can use GPU
+# PyTorch can use GPU (KEY TEST!)
 python -c "import torch; print(torch.cuda.is_available())"
 ```
 
 ## Expected Results After Fix
 
-### Before (Current State):
+### Before (Wrong PyTorch Wheels):
 ```bash
-lsmod | grep amdgpu
-# (empty - no module loaded)
+python -c "import torch; print(torch.__version__)"
+# 2.5.1+rocm6.2 (from pytorch.org - doesn't work)
+# OR 2.9.1+cu128 (CUDA version - completely wrong)
 
 python -c "import torch; print(torch.cuda.is_available())"
 # False
 ```
 
-### After (Fixed):
+### After (AMD Wheels + WSL Fix):
 ```bash
-lsmod | grep amdgpu
-# amdgpu    12345678  0
-# (module loaded!)
+python -c "import torch; print(torch.__version__)"
+# 2.6.0+rocm6.4.2.git76481f7c (from repo.radeon.com - works!)
 
 python -c "import torch; print(torch.cuda.is_available())"
 # True
+
+python verify_gpu.py
+# ✅ GPU is available and working!
+# GPU 0: AMD Radeon RX 7900 GRE
+# Total Memory: 15.98 GB
 ```
+
+**Note:** The amdgpu module may or may not load in WSL2 - this is normal. GPU access works via DirectX passthrough (`/dev/dxg`) even without the amdgpu kernel module.
 
 ## If All Else Fails
 
