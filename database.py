@@ -2,11 +2,14 @@
 from sqlmodel import Field, SQLModel, create_engine, Relationship
 from datetime import datetime
 from typing import Optional, List
+from pydantic import ConfigDict
 import os
 
 # --- Table 1: The Model Registry ---
 # Stores *metadata* about models, not the models themselves.
 class ModelRegistry(SQLModel, table=True):
+    model_config = ConfigDict(protected_namespaces=())
+
     id: Optional[int] = Field(default=None, primary_key=True)
     model_name: str = Field(unique=True, index=True)  # Your friendly name
     hf_path: str                                       # Hugging Face path
@@ -20,6 +23,21 @@ class ModelRegistry(SQLModel, table=True):
     default_dtype: Optional[str] = None    # e.g., "bfloat16", "float16"
     context_length: Optional[int] = None   # Maximum context window
 
+    # Benchmark Metrics (Quality/Capability Scores)
+    mmlu_score: Optional[float] = None           # General knowledge (0-100)
+    gpqa_score: Optional[float] = None           # Graduate-level reasoning
+    hellaswag_score: Optional[float] = None      # Commonsense reasoning
+    humaneval_score: Optional[float] = None      # Coding ability (Python)
+    mbpp_score: Optional[float] = None           # More Python coding
+    math_score: Optional[float] = None           # Mathematical reasoning
+    truthfulqa_score: Optional[float] = None     # Honesty/hallucination resistance
+    perplexity: Optional[float] = None           # Fluency (lower is better)
+
+    # Operational Metrics (Speed & Usability)
+    max_throughput_tokens_sec: Optional[float] = None  # Max tokens/second
+    avg_latency_ms: Optional[float] = None             # Average TTFT in milliseconds
+    quantization: Optional[str] = None                 # e.g., "GGUF Q4_K_M", "GPTQ 4-bit", "None"
+
     # Usage statistics
     total_loads: int = Field(default=0)    # How many times this model has been loaded
     total_inferences: int = Field(default=0)  # Total number of inferences run
@@ -32,6 +50,8 @@ class ModelRegistry(SQLModel, table=True):
 # --- Table 2: The Performance Log ---
 # Stores the results of each inference with comprehensive scientific metrics.
 class PerformanceLog(SQLModel, table=True):
+    model_config = ConfigDict(protected_namespaces=())
+
     id: Optional[int] = Field(default=None, primary_key=True)
     timestamp: datetime = Field(default_factory=datetime.now)
 

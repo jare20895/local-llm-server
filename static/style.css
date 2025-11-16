@@ -334,6 +334,18 @@ body {
     overflow-y: auto;
 }
 
+.generated-text.streaming::after {
+    content: '▊';
+    animation: blink 1s infinite;
+    color: var(--primary-color);
+    margin-left: 2px;
+}
+
+@keyframes blink {
+    0%, 50% { opacity: 1; }
+    51%, 100% { opacity: 0; }
+}
+
 .stats {
     font-size: 13px;
     color: var(--text-secondary);
@@ -588,6 +600,38 @@ input:checked + .slider:before {
 
 .text-warning {
     color: var(--warning-color);
+}
+
+/* Model Card Sections and Badges */
+.model-section {
+    margin: 12px 0;
+    padding: 10px 0;
+}
+
+.metric-badge {
+    display: inline-block;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 4px 10px;
+    margin: 4px 4px 4px 0;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+/* Larger Modal for Metadata Editing */
+.modal-large {
+    max-width: 800px;
+}
+
+.modal-large h4 {
+    font-size: 16px;
+    font-weight: 600;
+    margin: 15px 0 10px 0;
+    color: var(--text-primary);
+    border-bottom: 2px solid var(--border-color);
+    padding-bottom: 8px;
 }
 
 /* Scrollbar Styling */

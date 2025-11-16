@@ -60,6 +60,12 @@ $RECYCLE.BIN/
 .directory
 .Trash-*
 
+
+#LLM Model folders & database files
+hf-cache/
+data/
+
+
 # -------------------------------------------------------------------
 # § IDE & Editor Config
 #

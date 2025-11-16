@@ -1,26 +1,0 @@
-nohup: ignoring input
-INFO:     Started server process [22195]
-INFO:     Waiting for application startup.
-🔄 Loading tokenizer...
-🔄 Loading model...
-Loading checkpoint shards:   0%|          | 0/4 [00:00<?, ?it/s]Loading checkpoint shards:  25%|██▌       | 1/4 [00:02<00:06,  2.29s/it]Loading checkpoint shards:  50%|█████     | 2/4 [00:04<00:04,  2.10s/it]Loading checkpoint shards:  75%|███████▌  | 3/4 [00:04<00:01,  1.28s/it]Loading checkpoint shards: 100%|██████████| 4/4 [00:04<00:00,  1.14s/it]
-Some parameters are on the meta device because they were offloaded to the cpu.
-INFO:     Application startup complete.
-INFO:     Uvicorn running on http://0.0.0.0:8089 (Press CTRL+C to quit)
-/home/jare16/pytorch/lib/python3.12/site-packages/transformers/integrations/sdpa_attention.py:96: UserWarning: Using AOTriton backend for Flash Attention forward... (Triggered internally at /pytorch/aten/src/ATen/native/transformers/hip/flash_attn/flash_api.h:267.)
-  attn_output = torch.nn.functional.scaled_dot_product_attention(
-✅ Model loaded on device(s) cuda
-INFO:     127.0.0.1:41210 - "POST /generate HTTP/1.1" 200 OK
-INFO:     127.0.0.1:52368 - "GET / HTTP/1.1" 200 OK
-INFO:     127.0.0.1:51510 - "GET /favicon.ico HTTP/1.1" 404 Not Found
-INFO:     127.0.0.1:36884 - "POST /generate HTTP/1.1" 422 Unprocessable Entity
-INFO:     127.0.0.1:38148 - "POST /generate HTTP/1.1" 200 OK
-INFO:     127.0.0.1:36090 - "POST /generate HTTP/1.1" 422 Unprocessable Entity
-INFO:     127.0.0.1:52502 - "POST /generate HTTP/1.1" 422 Unprocessable Entity
-INFO:     127.0.0.1:47224 - "POST /generate HTTP/1.1" 200 OK
-INFO:     127.0.0.1:46000 - "POST /generate HTTP/1.1" 200 OK
-INFO:     127.0.0.1:43316 - "POST /generate HTTP/1.1" 200 OK
-INFO:     Shutting down
-INFO:     Waiting for application shutdown.
-INFO:     Application shutdown complete.
-INFO:     Finished server process [22195]

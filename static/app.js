@@ -112,16 +112,53 @@ function createModelCard(model) {
         return dateStr ? new Date(dateStr).toLocaleString() : 'Never';
     };
 
+    const formatScore = (score) => {
+        return score !== null && score !== undefined ? score.toFixed(1) : '-';
+    };
+
+    // Build benchmark scores section if any are available
+    const hasBenchmarks = model.mmlu_score || model.gpqa_score || model.hellaswag_score ||
+                         model.humaneval_score || model.mbpp_score || model.math_score ||
+                         model.truthfulqa_score || model.perplexity;
+
+    let benchmarkSection = '';
+    if (hasBenchmarks) {
+        benchmarkSection = `
+            <div class="model-section">
+                <strong>📊 Benchmarks:</strong>
+                ${model.mmlu_score ? `<span class="metric-badge">MMLU: ${formatScore(model.mmlu_score)}</span>` : ''}
+                ${model.gpqa_score ? `<span class="metric-badge">GPQA: ${formatScore(model.gpqa_score)}</span>` : ''}
+                ${model.hellaswag_score ? `<span class="metric-badge">HellaSwag: ${formatScore(model.hellaswag_score)}</span>` : ''}
+                ${model.humaneval_score ? `<span class="metric-badge">HumanEval: ${formatScore(model.humaneval_score)}</span>` : ''}
+                ${model.mbpp_score ? `<span class="metric-badge">MBPP: ${formatScore(model.mbpp_score)}</span>` : ''}
+                ${model.math_score ? `<span class="metric-badge">MATH: ${formatScore(model.math_score)}</span>` : ''}
+                ${model.truthfulqa_score ? `<span class="metric-badge">TruthfulQA: ${formatScore(model.truthfulqa_score)}</span>` : ''}
+                ${model.perplexity ? `<span class="metric-badge">Perplexity: ${formatScore(model.perplexity)}</span>` : ''}
+            </div>
+        `;
+    }
+
     card.innerHTML = `
         <h4>${model.model_name}</h4>
         <p><strong>HF Path:</strong> ${model.hf_path}</p>
         ${model.parameter_count ? `<p><strong>Parameters:</strong> ${(model.parameter_count / 1e9).toFixed(2)}B</p>` : ''}
         ${model.architecture ? `<p><strong>Architecture:</strong> ${model.architecture}</p>` : ''}
-        <p><strong>Total Loads:</strong> ${model.total_loads || 0}</p>
-        <p><strong>Total Inferences:</strong> ${model.total_inferences || 0}</p>
+        ${model.default_dtype ? `<p><strong>Tensor Type:</strong> ${model.default_dtype}</p>` : ''}
+        ${model.context_length ? `<p><strong>Context Window:</strong> ${model.context_length.toLocaleString()} tokens</p>` : ''}
+        ${model.quantization ? `<p><strong>Quantization:</strong> ${model.quantization}</p>` : ''}
+        ${benchmarkSection}
+        ${model.max_throughput_tokens_sec || model.avg_latency_ms ? `
+            <div class="model-section">
+                <strong>⚡ Performance:</strong>
+                ${model.max_throughput_tokens_sec ? `<span class="metric-badge">Throughput: ${formatScore(model.max_throughput_tokens_sec)} tok/s</span>` : ''}
+                ${model.avg_latency_ms ? `<span class="metric-badge">TTFT: ${formatScore(model.avg_latency_ms)}ms</span>` : ''}
+            </div>
+        ` : ''}
+        <p><strong>Total Loads:</strong> ${model.total_loads || 0} | <strong>Inferences:</strong> ${model.total_inferences || 0}</p>
         <p><strong>Last Loaded:</strong> ${formatDate(model.last_loaded)}</p>
         <div class="model-card-actions">
             <button class="btn btn-primary" onclick="loadModelToMemory('${model.model_name}')">Load</button>
+            <button class="btn btn-secondary" onclick="showEditMetadataModal('${model.model_name}')">Edit Metrics</button>
             <button class="btn btn-danger" onclick="deleteModel('${model.model_name}')">Delete</button>
         </div>
     `;
@@ -244,6 +281,17 @@ function showLoadModel() {
 async function generateText(event) {
     event.preventDefault();
 
+    const enableStreaming = document.getElementById('enable-streaming').checked;
+
+    if (enableStreaming) {
+        return generateTextStreaming(event);
+    } else {
+        return generateTextNonStreaming(event);
+    }
+}
+
+// Non-streaming generation (original)
+async function generateTextNonStreaming(event) {
     const formData = {
         prompt: document.getElementById('prompt').value,
         max_tokens: parseInt(document.getElementById('max-tokens').value),
@@ -252,7 +300,7 @@ async function generateText(event) {
         do_sample: document.getElementById('do-sample').checked
     };
 
-    const submitBtn = event.target.querySelector('button[type="submit"]');
+    const submitBtn = document.getElementById('generate-btn');
     submitBtn.textContent = 'Generating...';
     submitBtn.disabled = true;
 
@@ -286,6 +334,111 @@ async function generateText(event) {
     } finally {
         submitBtn.textContent = 'Generate';
         submitBtn.disabled = false;
+    }
+}
+
+// Streaming generation (new)
+async function generateTextStreaming(event) {
+    const formData = {
+        prompt: document.getElementById('prompt').value,
+        max_tokens: parseInt(document.getElementById('max-tokens').value),
+        temperature: parseFloat(document.getElementById('temperature').value),
+        top_p: parseFloat(document.getElementById('top-p').value),
+        do_sample: document.getElementById('do-sample').checked
+    };
+
+    const submitBtn = document.getElementById('generate-btn');
+    submitBtn.textContent = 'Generating...';
+    submitBtn.disabled = true;
+
+    // Show results container and clear previous content
+    document.getElementById('generation-result').style.display = 'block';
+    const textDiv = document.getElementById('generated-text');
+    textDiv.textContent = '';
+    textDiv.classList.add('streaming');
+
+    let fullText = '';
+    let stats = null;
+
+    try {
+        const response = await fetch(`${API_BASE}/api/generate/stream`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(formData)
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            alert(`Generation failed: ${error.detail}`);
+            return;
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            // Decode the chunk and add to buffer
+            buffer += decoder.decode(value, { stream: true });
+
+            // Process complete lines
+            const lines = buffer.split('\n');
+
+            // Keep the last incomplete line in the buffer
+            buffer = lines.pop() || '';
+
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    try {
+                        const data = JSON.parse(line.slice(6));
+
+                        if (data.type === 'start') {
+                            // Initial metadata received
+                            console.log('Stream started, input tokens:', data.input_tokens);
+                        } else if (data.type === 'token') {
+                            // New token received - update immediately
+                            fullText += data.text;
+                            textDiv.textContent = fullText;
+                            // Force immediate render
+                            textDiv.scrollTop = textDiv.scrollHeight;
+                            // Force browser to render immediately
+                            await new Promise(resolve => setTimeout(resolve, 0));
+                        } else if (data.type === 'done') {
+                            // Generation complete
+                            stats = data;
+                        } else if (data.type === 'error') {
+                            alert(`Generation error: ${data.error}`);
+                            return;
+                        }
+                    } catch (e) {
+                        console.error('Failed to parse SSE data:', line, e);
+                    }
+                }
+            }
+        }
+
+        // Display final stats
+        if (stats) {
+            const statsHtml = `
+                <strong>Input Tokens:</strong> ${stats.input_tokens} |
+                <strong>Output Tokens:</strong> ${stats.output_tokens} |
+                <strong>Total Tokens:</strong> ${stats.total_tokens} |
+                <strong>Time:</strong> ${stats.inference_time_ms.toFixed(0)}ms |
+                <strong>TTFT:</strong> ${stats.ttft_ms.toFixed(0)}ms |
+                <strong>Speed:</strong> ${stats.tokens_per_second.toFixed(2)} tok/s
+            `;
+            document.getElementById('generation-stats').innerHTML = statsHtml;
+        }
+
+    } catch (error) {
+        alert(`Error during streaming: ${error.message}`);
+    } finally {
+        submitBtn.textContent = 'Generate';
+        submitBtn.disabled = false;
+        textDiv.classList.remove('streaming');
     }
 }
 
@@ -466,4 +619,90 @@ function renderLogsTable(logs) {
 
     html += '</tbody></table>';
     tableContainer.innerHTML = html;
+}
+
+// Model Metadata Editing
+let currentEditingModel = null;
+
+async function showEditMetadataModal(modelName) {
+    currentEditingModel = modelName;
+
+    // Fetch current model data
+    try {
+        const response = await fetch(`${API_BASE}/api/models`);
+        const models = await response.json();
+        const model = models.find(m => m.model_name === modelName);
+
+        if (!model) {
+            alert('Model not found');
+            return;
+        }
+
+        // Populate form with current values
+        document.getElementById('edit-model-name-display').textContent = modelName;
+        document.getElementById('edit-mmlu').value = model.mmlu_score || '';
+        document.getElementById('edit-gpqa').value = model.gpqa_score || '';
+        document.getElementById('edit-hellaswag').value = model.hellaswag_score || '';
+        document.getElementById('edit-humaneval').value = model.humaneval_score || '';
+        document.getElementById('edit-mbpp').value = model.mbpp_score || '';
+        document.getElementById('edit-math').value = model.math_score || '';
+        document.getElementById('edit-truthfulqa').value = model.truthfulqa_score || '';
+        document.getElementById('edit-perplexity').value = model.perplexity || '';
+        document.getElementById('edit-throughput').value = model.max_throughput_tokens_sec || '';
+        document.getElementById('edit-latency').value = model.avg_latency_ms || '';
+        document.getElementById('edit-quantization').value = model.quantization || '';
+
+        document.getElementById('edit-metadata-modal').classList.add('active');
+    } catch (error) {
+        alert(`Error loading model data: ${error.message}`);
+    }
+}
+
+function closeEditMetadataModal() {
+    document.getElementById('edit-metadata-modal').classList.remove('active');
+    document.getElementById('edit-metadata-form').reset();
+    currentEditingModel = null;
+}
+
+async function updateModelMetadata(event) {
+    event.preventDefault();
+
+    if (!currentEditingModel) {
+        alert('No model selected');
+        return;
+    }
+
+    const formData = {
+        mmlu_score: parseFloat(document.getElementById('edit-mmlu').value) || null,
+        gpqa_score: parseFloat(document.getElementById('edit-gpqa').value) || null,
+        hellaswag_score: parseFloat(document.getElementById('edit-hellaswag').value) || null,
+        humaneval_score: parseFloat(document.getElementById('edit-humaneval').value) || null,
+        mbpp_score: parseFloat(document.getElementById('edit-mbpp').value) || null,
+        math_score: parseFloat(document.getElementById('edit-math').value) || null,
+        truthfulqa_score: parseFloat(document.getElementById('edit-truthfulqa').value) || null,
+        perplexity: parseFloat(document.getElementById('edit-perplexity').value) || null,
+        max_throughput_tokens_sec: parseFloat(document.getElementById('edit-throughput').value) || null,
+        avg_latency_ms: parseFloat(document.getElementById('edit-latency').value) || null,
+        quantization: document.getElementById('edit-quantization').value || null
+    };
+
+    try {
+        const response = await fetch(`${API_BASE}/api/models/${currentEditingModel}/metadata`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(formData)
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+            alert('Model metadata updated successfully!');
+            closeEditMetadataModal();
+            loadModels();
+        } else {
+            alert(`Failed to update metadata: ${data.detail}`);
+        }
+    } catch (error) {
+        alert(`Error updating metadata: ${error.message}`);
+    }
 }

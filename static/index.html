@@ -3,14 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Homelab LLM Server</title>
+    <title>Vector-Console LLM Server</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
     <!-- Top Navigation Bar -->
     <nav class="top-nav">
         <div class="nav-brand">
-            <h1>🤖 Homelab LLM Server</h1>
+            <h1>🤖 Vector-Console LLM Server</h1>
         </div>
         <div class="nav-tabs">
             <button class="tab-btn active" data-tab="inference">Inference</button>
@@ -103,7 +103,14 @@
                             </label>
                         </div>
 
-                        <button type="submit" class="btn btn-primary">Generate</button>
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="enable-streaming" name="enable_streaming" checked>
+                                Enable Streaming (real-time token display)
+                            </label>
+                        </div>
+
+                        <button type="submit" class="btn btn-primary" id="generate-btn">Generate</button>
                     </form>
 
                     <div id="generation-result" class="result-box" style="display: none;">
@@ -237,6 +244,92 @@
                     <button type="button" class="btn btn-secondary"
                         onclick="closeRegisterModal()">Cancel</button>
                     <button type="submit" class="btn btn-primary">Register</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal for editing model metadata -->
+    <div id="edit-metadata-modal" class="modal">
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <h3>Edit Model Metrics: <span id="edit-model-name-display"></span></h3>
+                <span class="close" onclick="closeEditMetadataModal()">&times;</span>
+            </div>
+            <form id="edit-metadata-form" onsubmit="updateModelMetadata(event)">
+                <h4>Benchmark Metrics (Quality/Capability Scores)</h4>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="edit-mmlu">MMLU (General Knowledge)</label>
+                        <input type="number" id="edit-mmlu" step="0.1" min="0" max="100"
+                            placeholder="0-100">
+                    </div>
+                    <div class="form-group">
+                        <label for="edit-gpqa">GPQA (Graduate Reasoning)</label>
+                        <input type="number" id="edit-gpqa" step="0.1" min="0" max="100"
+                            placeholder="0-100">
+                    </div>
+                    <div class="form-group">
+                        <label for="edit-hellaswag">HellaSwag (Common Sense)</label>
+                        <input type="number" id="edit-hellaswag" step="0.1" min="0" max="100"
+                            placeholder="0-100">
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="edit-humaneval">HumanEval (Python Coding)</label>
+                        <input type="number" id="edit-humaneval" step="0.1" min="0" max="100"
+                            placeholder="0-100">
+                    </div>
+                    <div class="form-group">
+                        <label for="edit-mbpp">MBPP (Python Coding)</label>
+                        <input type="number" id="edit-mbpp" step="0.1" min="0" max="100"
+                            placeholder="0-100">
+                    </div>
+                    <div class="form-group">
+                        <label for="edit-math">MATH (Mathematical Reasoning)</label>
+                        <input type="number" id="edit-math" step="0.1" min="0" max="100"
+                            placeholder="0-100">
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="edit-truthfulqa">TruthfulQA (Honesty)</label>
+                        <input type="number" id="edit-truthfulqa" step="0.1" min="0" max="100"
+                            placeholder="0-100">
+                    </div>
+                    <div class="form-group">
+                        <label for="edit-perplexity">Perplexity (lower is better)</label>
+                        <input type="number" id="edit-perplexity" step="0.1" min="0"
+                            placeholder="e.g., 5.2">
+                    </div>
+                </div>
+
+                <h4 style="margin-top: 20px;">Operational Metrics (Speed & Usability)</h4>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="edit-throughput">Max Throughput (tokens/sec)</label>
+                        <input type="number" id="edit-throughput" step="0.1" min="0"
+                            placeholder="e.g., 45.5">
+                    </div>
+                    <div class="form-group">
+                        <label for="edit-latency">Avg Latency TTFT (ms)</label>
+                        <input type="number" id="edit-latency" step="0.1" min="0"
+                            placeholder="e.g., 125.3">
+                    </div>
+                    <div class="form-group">
+                        <label for="edit-quantization">Quantization</label>
+                        <input type="text" id="edit-quantization"
+                            placeholder="e.g., GGUF Q4_K_M, None">
+                    </div>
+                </div>
+
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary"
+                        onclick="closeEditMetadataModal()">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save Metrics</button>
                 </div>
             </form>
         </div>

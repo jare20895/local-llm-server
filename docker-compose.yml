@@ -17,8 +17,8 @@ services:
       - .:/app
       # Persistent SQLite database
       - ./data:/app/data
-      # Hugging Face cache for models
-      - hf-cache:/root/.cache/huggingface
+      # Hugging Face cache for models (bind mount for easy access)
+      - ./hf-cache:/root/.cache/huggingface
       # WSL GPU libraries (CRITICAL for GPU detection in Docker)
       - /usr/lib/wsl/lib/libdxcore.so:/usr/lib/libdxcore.so
       - /opt/rocm/lib/libhsa-runtime64.so.1:/opt/rocm/lib/libhsa-runtime64.so.1
@@ -33,7 +33,6 @@ services:
       - PYTORCH_HIP_ALLOC_CONF=garbage_collection_threshold:0.6,max_split_size_mb:128
       # Hugging Face settings
       - HF_HOME=/root/.cache/huggingface
-      - TRANSFORMERS_CACHE=/root/.cache/huggingface/transformers
       # Database path
       - DATABASE_PATH=/app/data/models.db
       # Optional: Hugging Face token
@@ -42,7 +41,7 @@ services:
     # Install Python dependencies on container start
     entrypoint: >
       sh -c "
-      pip install --no-cache-dir fastapi==0.115.0 uvicorn[standard]==0.32.0 pydantic==2.9.2 sqlmodel==0.0.22 sqlalchemy==2.0.35 transformers>=4.40.0 accelerate>=0.30.0 psutil==6.1.0 python-multipart==0.0.12 &&
+      pip install --no-cache-dir --root-user-action=ignore fastapi==0.115.0 uvicorn[standard]==0.32.0 pydantic==2.9.2 sqlmodel==0.0.22 sqlalchemy==2.0.35 transformers>=4.40.0 accelerate>=0.30.0 psutil==6.1.0 python-multipart==0.0.12 &&
       python main.py
       "
 
@@ -55,7 +54,3 @@ services:
     shm_size: 8G  # AMD recommended for ROCm
     stdin_open: true
     tty: true
-
-volumes:
-  hf-cache:
-    driver: local

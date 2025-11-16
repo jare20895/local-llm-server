@@ -3,15 +3,18 @@ import torch
 import time
 import os
 import psutil
+import json
+import threading
+from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlmodel import Session, select
-from transformers import AutoTokenizer, AutoModelForCausalLM
-from pydantic import BaseModel, Field
+from transformers import AutoTokenizer, AutoModelForCausalLM, TextIteratorStreamer
+from pydantic import BaseModel, Field, ConfigDict
 
 # --- Database Setup ---
 from database import (
@@ -117,6 +120,8 @@ class ModelManager:
 
 # --- Pydantic API Models ---
 class ModelCreateRequest(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
     model_name: str = Field(..., description="Friendly name for the model")
     hf_path: str = Field(..., description="Hugging Face model path or local path")
     trust_remote_code: bool = Field(
@@ -125,6 +130,8 @@ class ModelCreateRequest(BaseModel):
 
 
 class ModelLoadRequest(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
     model_name: str = Field(..., description="Name of the model to load")
 
 
@@ -140,12 +147,60 @@ class LoggingConfigRequest(BaseModel):
     enable: bool = Field(..., description="Enable or disable performance logging")
 
 
+class ModelMetadataUpdateRequest(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
+    # Benchmark metrics
+    mmlu_score: Optional[float] = None
+    gpqa_score: Optional[float] = None
+    hellaswag_score: Optional[float] = None
+    humaneval_score: Optional[float] = None
+    mbpp_score: Optional[float] = None
+    math_score: Optional[float] = None
+    truthfulqa_score: Optional[float] = None
+    perplexity: Optional[float] = None
+
+    # Operational metrics
+    max_throughput_tokens_sec: Optional[float] = None
+    avg_latency_ms: Optional[float] = None
+    quantization: Optional[str] = None
+
+
 class ModelResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
     id: int
     model_name: str
     hf_path: str
     trust_remote_code: bool
     created_at: datetime
+
+    # Model metadata
+    parameter_count: Optional[int] = None
+    model_type: Optional[str] = None
+    architecture: Optional[str] = None
+    default_dtype: Optional[str] = None
+    context_length: Optional[int] = None
+
+    # Benchmark metrics
+    mmlu_score: Optional[float] = None
+    gpqa_score: Optional[float] = None
+    hellaswag_score: Optional[float] = None
+    humaneval_score: Optional[float] = None
+    mbpp_score: Optional[float] = None
+    math_score: Optional[float] = None
+    truthfulqa_score: Optional[float] = None
+    perplexity: Optional[float] = None
+
+    # Operational metrics
+    max_throughput_tokens_sec: Optional[float] = None
+    avg_latency_ms: Optional[float] = None
+    quantization: Optional[str] = None
+
+    # Usage statistics
+    total_loads: int = 0
+    total_inferences: int = 0
+    last_loaded: Optional[datetime] = None
 
 
 class StatusResponse(BaseModel):
@@ -176,11 +231,23 @@ class PerformanceStatsResponse(BaseModel):
     avg_cpu_mem_mb: Optional[float] = None
 
 
+# --- Lifespan Context Manager ---
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Handle startup and shutdown events."""
+    # Startup
+    create_db_and_tables()
+    print("🚀 Homelab LLM Server started")
+    yield
+    # Shutdown (if needed in the future)
+
+
 # --- FastAPI App Setup ---
 app = FastAPI(
     title="Homelab LLM Server",
     description="A robust API for managing and serving local language models",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 # Add CORS middleware for UI
@@ -202,13 +269,6 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 def get_db_session():
     with Session(engine) as session:
         yield session
-
-
-# --- On Startup ---
-@app.on_event("startup")
-def on_startup():
-    create_db_and_tables()
-    print("🚀 Homelab LLM Server started")
 
 
 # --- API Endpoints ---
@@ -255,6 +315,39 @@ def list_models(session: Session = Depends(get_db_session)):
     """List all registered models."""
     models = session.exec(select(ModelRegistry)).all()
     return models
+
+
+@app.patch(
+    "/api/models/{model_name}/metadata",
+    response_model=ModelResponse,
+    tags=["Model Registry"],
+)
+def update_model_metadata(
+    model_name: str,
+    request: ModelMetadataUpdateRequest,
+    session: Session = Depends(get_db_session),
+):
+    """Update benchmark and operational metrics for a model."""
+    model = session.exec(
+        select(ModelRegistry).where(ModelRegistry.model_name == model_name)
+    ).first()
+
+    if not model:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Model '{model_name}' not found",
+        )
+
+    # Update only the fields that are provided (not None)
+    update_data = request.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(model, key, value)
+
+    session.add(model)
+    session.commit()
+    session.refresh(model)
+
+    return model
 
 
 @app.delete("/api/models/{model_name}", tags=["Model Registry"])
@@ -601,6 +694,164 @@ def generate_text(
         total_tokens=input_length + output_length,
         inference_time_ms=inference_time_ms,
         tokens_per_second=tokens_per_second,
+    )
+
+
+@app.post("/api/generate/stream", tags=["Inference"])
+async def generate_text_stream(
+    request: PromptRequest, session: Session = Depends(get_db_session)
+):
+    """Run inference with token streaming - provides real-time token generation."""
+    # Check if model is loaded
+    if not model_manager.model or not model_manager.tokenizer:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="No model currently loaded. Load a model first using /api/orchestrate/load",
+        )
+
+    async def generate_stream():
+        start_time = time.perf_counter()
+        ttft = None
+        input_length = 0
+        output_length = 0
+        error_occurred = False
+        error_message = None
+
+        try:
+            # Tokenize input
+            inputs = model_manager.tokenizer(request.prompt, return_tensors="pt")
+            input_length = inputs.input_ids.shape[1]
+
+            # Move to GPU if available
+            if torch.cuda.is_available():
+                inputs = {k: v.cuda() for k, v in inputs.items()}
+
+            # Send initial metadata
+            yield f"data: {json.dumps({'type': 'start', 'input_tokens': input_length})}\n\n"
+
+            # Create streamer with timeout to prevent buffering
+            streamer = TextIteratorStreamer(
+                model_manager.tokenizer,
+                skip_prompt=True,
+                skip_special_tokens=True,
+                timeout=0.1  # Small timeout to ensure immediate yielding
+            )
+
+            # Generation kwargs
+            generation_kwargs = {
+                **inputs,
+                "max_new_tokens": request.max_tokens,
+                "temperature": request.temperature,
+                "top_p": request.top_p,
+                "do_sample": request.do_sample,
+                "streamer": streamer,
+            }
+
+            # Run generation in a thread to avoid blocking
+            generation_thread = threading.Thread(
+                target=lambda: model_manager.model.generate(**generation_kwargs)
+            )
+            generation_thread.start()
+
+            # Stream tokens
+            token_count = 0
+            import sys
+            for token_text in streamer:
+                if ttft is None:
+                    ttft = (time.perf_counter() - start_time) * 1000
+                    print(f"TTFT: {ttft}ms", flush=True)  # Debug
+
+                token_count += 1
+                chunk = f"data: {json.dumps({'type': 'token', 'text': token_text})}\n\n"
+                print(f"Yielding token {token_count}: {repr(token_text)}", flush=True)  # Debug
+                yield chunk
+
+                # Ensure immediate flush by yielding empty string
+                # This forces the response to be sent immediately
+                sys.stdout.flush()
+
+            generation_thread.join()
+            output_length = token_count
+            print(f"Total tokens generated: {output_length}", flush=True)  # Debug
+
+        except Exception as e:
+            error_occurred = True
+            error_message = str(e)
+            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+            return
+
+        # Calculate final stats
+        end_time = time.perf_counter()
+        total_time_ms = (end_time - start_time) * 1000
+        tokens_per_second = (
+            output_length / (total_time_ms / 1000) if total_time_ms > 0 else 0
+        )
+
+        # Log to database if enabled
+        if model_manager.performance_logging and not error_occurred:
+            try:
+                # Get metrics
+                gpu_mem_peak_mb = None
+                if torch.cuda.is_available():
+                    gpu_mem_peak_mb = torch.cuda.max_memory_allocated() / (1024**2)
+
+                model_device = str(next(model_manager.model.parameters()).device)
+                model_dtype = str(next(model_manager.model.parameters()).dtype)
+
+                # Update model inference count
+                model_record = session.exec(
+                    select(ModelRegistry).where(
+                        ModelRegistry.id == model_manager.loaded_model_id
+                    )
+                ).first()
+                if model_record:
+                    model_record.total_inferences += 1
+                    session.add(model_record)
+
+                # Save log
+                log_entry = PerformanceLog(
+                    model_registry_id=model_manager.loaded_model_id,
+                    input_tokens=input_length,
+                    output_tokens=output_length,
+                    total_tokens=input_length + output_length,
+                    total_inference_ms=total_time_ms,
+                    time_to_first_token_ms=ttft,
+                    tokens_per_second=tokens_per_second,
+                    gpu_mem_peak_alloc_mb=gpu_mem_peak_mb,
+                    temperature=request.temperature,
+                    top_p=request.top_p,
+                    do_sample=request.do_sample,
+                    max_new_tokens=request.max_tokens,
+                    model_dtype=model_dtype,
+                    model_device=model_device,
+                    error_occurred=error_occurred,
+                    error_message=error_message,
+                )
+                session.add(log_entry)
+                session.commit()
+            except Exception as e:
+                print(f"Warning: Failed to log performance: {e}")
+
+        # Send final stats
+        final_stats = {
+            'type': 'done',
+            'input_tokens': input_length,
+            'output_tokens': output_length,
+            'total_tokens': input_length + output_length,
+            'inference_time_ms': total_time_ms,
+            'ttft_ms': ttft,
+            'tokens_per_second': tokens_per_second,
+        }
+        yield f"data: {json.dumps(final_stats)}\n\n"
+
+    return StreamingResponse(
+        generate_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # Disable nginx buffering
+        }
     )
 
 
