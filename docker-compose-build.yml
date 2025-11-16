@@ -1,0 +1,50 @@
+services:
+  llm-server:
+    # Build custom image from Dockerfile (uses AMD recommended base image)
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: homelab-llm-server-custom
+    ports:
+      - "8002:8000"
+
+    # WSL GPU passthrough
+    devices:
+      - /dev/dxg:/dev/dxg
+
+    volumes:
+      # Persistent SQLite database
+      - ./data:/app/data
+      # WSL GPU libraries (CRITICAL for GPU detection in Docker)
+      - /usr/lib/wsl/lib/libdxcore.so:/usr/lib/libdxcore.so
+      - /opt/rocm/lib/libhsa-runtime64.so.1:/opt/rocm/lib/libhsa-runtime64.so.1
+      # Hugging Face cache for models
+      - hf-cache:/root/.cache/huggingface
+
+    environment:
+      # ROCm environment variables
+      # NOTE: HSA_OVERRIDE_GFX_VERSION not needed when using proper library mounts
+      # The mounted libhsa-runtime64.so.1 handles GPU detection automatically
+      - ROCM_PATH=/opt/rocm
+      - HIP_VISIBLE_DEVICES=0
+      # Python/PyTorch settings
+      - PYTORCH_HIP_ALLOC_CONF=garbage_collection_threshold:0.6,max_split_size_mb:128
+      # Hugging Face settings
+      - HF_HOME=/root/.cache/huggingface
+      - TRANSFORMERS_CACHE=/root/.cache/huggingface/transformers
+      # Optional: Hugging Face token
+      # - HF_TOKEN=your_token_here
+
+    restart: unless-stopped
+    security_opt:
+      - seccomp:unconfined
+    cap_add:
+      - SYS_PTRACE
+    ipc: host
+    shm_size: 8G  # AMD recommended for ROCm
+    stdin_open: true
+    tty: true
+
+volumes:
+  hf-cache:
+    driver: local

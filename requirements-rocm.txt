@@ -1,0 +1,44 @@
+# ROCm-specific requirements
+# Use this file for AMD GPU systems with ROCm
+
+# === PyTorch with ROCm Support ===
+# AMD RECOMMENDS using wheels from repo.radeon.com (NOT pytorch.org)
+# These are tested more extensively and include critical WSL compatibility fixes
+#
+# AUTOMATED INSTALLATION (Recommended):
+#   ./setup_rocm.sh
+#
+# MANUAL INSTALLATION:
+#   wget https://repo.radeon.com/rocm/manylinux/rocm-rel-6.4.2/torch-2.6.0%2Brocm6.4.2.git76481f7c-cp312-cp312-linux_x86_64.whl
+#   wget https://repo.radeon.com/rocm/manylinux/rocm-rel-6.4.2/torchvision-0.21.0%2Brocm6.4.2.git4040d51f-cp312-cp312-linux_x86_64.whl
+#   wget https://repo.radeon.com/rocm/manylinux/rocm-rel-6.4.2/torchaudio-2.6.0%2Brocm6.4.2.gitd8831425-cp312-cp312-linux_x86_64.whl
+#   wget https://repo.radeon.com/rocm/manylinux/rocm-rel-6.4.2/pytorch_triton_rocm-3.2.0%2Brocm6.4.2.git7e948ebf-cp312-cp312-linux_x86_64.whl
+#   pip install *.whl
+#   # CRITICAL WSL FIX: Remove bundled libhsa-runtime64.so
+#   location=$(pip show torch | grep Location | awk -F ": " '{print $2}')
+#   rm -f ${location}/torch/lib/libhsa-runtime64.so*
+#
+# Then install the rest:
+# pip install -r requirements-rocm.txt
+
+# Core API Framework
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+pydantic==2.9.2
+
+# Database
+sqlmodel==0.0.22
+sqlalchemy==2.0.35
+
+# Machine Learning (PyTorch installed separately above)
+transformers>=4.40.0
+accelerate>=0.30.0
+
+# System Metrics
+psutil==6.1.0
+
+# Additional utilities
+python-multipart==0.0.12
+
+# Note: DO NOT install torch from this file
+# The ROCm version must be installed from the special index URL

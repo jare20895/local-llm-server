@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Homelab LLM Server</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <!-- Top Navigation Bar -->
+    <nav class="top-nav">
+        <div class="nav-brand">
+            <h1>🤖 Homelab LLM Server</h1>
+        </div>
+        <div class="nav-tabs">
+            <button class="tab-btn active" data-tab="inference">Inference</button>
+            <button class="tab-btn" data-tab="models">Models</button>
+            <button class="tab-btn" data-tab="analytics">Analytics</button>
+            <button class="tab-btn" data-tab="settings">Settings</button>
+        </div>
+        <div class="nav-status">
+            <span id="status-indicator" class="status-dot"></span>
+            <span id="status-text">Loading...</span>
+        </div>
+    </nav>
+
+    <div class="main-container">
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-section">
+                <h3>Quick Actions</h3>
+                <button class="sidebar-btn" onclick="refreshStatus()">🔄 Refresh Status</button>
+                <button class="sidebar-btn" onclick="showLoadModel()">📥 Load Model</button>
+                <button class="sidebar-btn" onclick="unloadModel()">📤 Unload Model</button>
+            </div>
+
+            <div class="sidebar-section">
+                <h3>System Info</h3>
+                <div class="info-item">
+                    <span class="info-label">Current Model:</span>
+                    <span id="current-model" class="info-value">None</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">GPU Available:</span>
+                    <span id="gpu-available" class="info-value">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">GPU Memory:</span>
+                    <span id="gpu-memory" class="info-value">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Performance Logging:</span>
+                    <span id="perf-logging" class="info-value">-</span>
+                </div>
+            </div>
+
+            <div class="sidebar-section">
+                <h3>API Documentation</h3>
+                <a href="/docs" target="_blank" class="sidebar-link">📚 Swagger Docs</a>
+                <a href="/redoc" target="_blank" class="sidebar-link">📖 ReDoc</a>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="content">
+            <!-- Inference Tab -->
+            <div class="tab-content active" id="inference-tab">
+                <h2>Model Inference</h2>
+
+                <div class="card">
+                    <h3>Generate Text</h3>
+                    <form id="inference-form" onsubmit="generateText(event)">
+                        <div class="form-group">
+                            <label for="prompt">Prompt</label>
+                            <textarea id="prompt" name="prompt" rows="5"
+                                placeholder="Enter your prompt here..." required></textarea>
+                        </div>
+
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="max-tokens">Max Tokens</label>
+                                <input type="number" id="max-tokens" name="max_tokens"
+                                    value="256" min="1" max="4096">
+                            </div>
+
+                            <div class="form-group">
+                                <label for="temperature">Temperature</label>
+                                <input type="number" id="temperature" name="temperature"
+                                    value="0.7" min="0" max="2" step="0.1">
+                            </div>
+
+                            <div class="form-group">
+                                <label for="top-p">Top P</label>
+                                <input type="number" id="top-p" name="top_p"
+                                    value="0.9" min="0" max="1" step="0.05">
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="do-sample" name="do_sample" checked>
+                                Use Sampling
+                            </label>
+                        </div>
+
+                        <button type="submit" class="btn btn-primary">Generate</button>
+                    </form>
+
+                    <div id="generation-result" class="result-box" style="display: none;">
+                        <h4>Generated Text</h4>
+                        <div id="generated-text" class="generated-text"></div>
+                        <div id="generation-stats" class="stats"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Models Tab -->
+            <div class="tab-content" id="models-tab">
+                <h2>Model Management</h2>
+
+                <div class="card">
+                    <div class="card-header">
+                        <h3>Registered Models</h3>
+                        <button class="btn btn-primary" onclick="showRegisterModal()">+ Register New Model</button>
+                    </div>
+
+                    <div id="models-list" class="models-grid">
+                        <p class="loading">Loading models...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Analytics Tab -->
+            <div class="tab-content" id="analytics-tab">
+                <h2>Performance Analytics</h2>
+
+                <div class="card">
+                    <h3>Select Model for Analysis</h3>
+                    <select id="analytics-model-select" onchange="loadAnalytics()">
+                        <option value="">-- Select a model --</option>
+                    </select>
+
+                    <div id="analytics-data" style="margin-top: 20px; display: none;">
+                        <div class="stats-grid">
+                            <div class="stat-card">
+                                <div class="stat-label">Total Inferences</div>
+                                <div class="stat-value" id="stat-total"></div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-label">Avg Input Tokens</div>
+                                <div class="stat-value" id="stat-input"></div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-label">Avg Output Tokens</div>
+                                <div class="stat-value" id="stat-output"></div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-label">Avg Inference Time</div>
+                                <div class="stat-value" id="stat-time"></div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-label">Avg Tokens/Second</div>
+                                <div class="stat-value" id="stat-tps"></div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-label">Avg GPU Memory</div>
+                                <div class="stat-value" id="stat-gpu"></div>
+                            </div>
+                        </div>
+
+                        <h3 style="margin-top: 30px;">Recent Logs</h3>
+                        <div id="logs-table" class="table-container"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Settings Tab -->
+            <div class="tab-content" id="settings-tab">
+                <h2>Settings</h2>
+
+                <div class="card">
+                    <h3>Performance Logging</h3>
+                    <p>Control whether detailed performance metrics are collected during inference.</p>
+
+                    <div class="toggle-container">
+                        <label class="toggle">
+                            <input type="checkbox" id="logging-toggle" onchange="toggleLogging()">
+                            <span class="slider"></span>
+                        </label>
+                        <span id="logging-status">Loading...</span>
+                    </div>
+
+                    <div class="info-box">
+                        <strong>Note:</strong> Disabling logging improves inference speed by ~5-10%
+                        but prevents collection of performance metrics.
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h3>Model Validation</h3>
+                    <p>Test the currently loaded model to ensure it's working correctly.</p>
+                    <button class="btn btn-primary" onclick="validateModel()">Run Validation Test</button>
+                    <div id="validation-result" style="margin-top: 15px;"></div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Modal for registering new model -->
+    <div id="register-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Register New Model</h3>
+                <span class="close" onclick="closeRegisterModal()">&times;</span>
+            </div>
+            <form id="register-form" onsubmit="registerModel(event)">
+                <div class="form-group">
+                    <label for="model-name">Model Name</label>
+                    <input type="text" id="model-name" required
+                        placeholder="e.g., qwen-2.5-3b">
+                </div>
+
+                <div class="form-group">
+                    <label for="hf-path">Hugging Face Path</label>
+                    <input type="text" id="hf-path" required
+                        placeholder="e.g., Qwen/Qwen2.5-3B-Instruct">
+                </div>
+
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="trust-remote">
+                        Trust Remote Code
+                    </label>
+                </div>
+
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary"
+                        onclick="closeRegisterModal()">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Register</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

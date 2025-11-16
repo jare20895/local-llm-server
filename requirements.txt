@@ -1,0 +1,48 @@
+# ============================================================================
+# IMPORTANT: PyTorch Installation
+# ============================================================================
+# PyTorch must be installed separately based on your GPU type:
+#
+# AMD GPU (ROCm) - RECOMMENDED for RX 7900 series, RX 6000 series:
+#   Use AMD-tested wheels from repo.radeon.com (best WSL compatibility)
+#   Run: ./setup_rocm.sh
+#
+#   Manual installation:
+#   wget https://repo.radeon.com/rocm/manylinux/rocm-rel-6.4.2/torch-2.6.0%2Brocm6.4.2.git76481f7c-cp312-cp312-linux_x86_64.whl
+#   wget https://repo.radeon.com/rocm/manylinux/rocm-rel-6.4.2/torchvision-0.21.0%2Brocm6.4.2.git4040d51f-cp312-cp312-linux_x86_64.whl
+#   wget https://repo.radeon.com/rocm/manylinux/rocm-rel-6.4.2/torchaudio-2.6.0%2Brocm6.4.2.gitd8831425-cp312-cp312-linux_x86_64.whl
+#   wget https://repo.radeon.com/rocm/manylinux/rocm-rel-6.4.2/pytorch_triton_rocm-3.2.0%2Brocm6.4.2.git7e948ebf-cp312-cp312-linux_x86_64.whl
+#   pip install *.whl
+#   # WSL CRITICAL FIX: Remove bundled libhsa-runtime64.so
+#   rm $(pip show torch | grep Location | awk -F ": " '{print $2}')/torch/lib/libhsa-runtime64.so*
+#
+# NVIDIA GPU (CUDA):
+#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+#
+# CPU Only:
+#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+#
+# After installing PyTorch, install the rest:
+#   pip install -r requirements.txt
+# ============================================================================
+
+# Core API Framework
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+pydantic==2.9.2
+
+# Database
+sqlmodel==0.0.22
+sqlalchemy==2.0.35
+
+# Machine Learning
+# NOTE: torch is installed separately (see instructions above)
+# torch>=2.0.0  # DO NOT UNCOMMENT - Install with --index-url flag instead
+transformers>=4.40.0
+accelerate>=0.30.0
+
+# System Metrics
+psutil==6.1.0
+
+# Additional utilities
+python-multipart==0.0.12  # For file uploads if needed in future
