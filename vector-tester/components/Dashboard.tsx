@@ -179,7 +179,7 @@ export default function Dashboard({
   ];
 
   const sidebarSections: Record<string, string[]> = {
-    dashboard: ["LLM Status", "Model Snapshot", "Live Logs"],
+    dashboard: ["System Status", "Quick Actions", "Recent Activity"],
     registry: ["Select model", "Offline copies", "Registry sync"],
     runner: ["Manual tests", "Scenarios", "Operator notes"],
     results: ["Recent runs", "Log timeline", "Insights"],
@@ -286,55 +286,123 @@ export default function Dashboard({
     </table>
   );
 
-  const renderDashboardTab = () => (
-    <>
-      <div className="grid grid-2">
-        <section className="card">
-          <div style={{ display: "flex", justifyContent: "space-between" }}>
-            <h2>LLM API Status</h2>
-            <span className={`status-pill ${summarizeStatus.badge}`}>
-              {summarizeStatus.state}
-            </span>
-          </div>
-          <p className="muted">{summarizeStatus.detail}</p>
-          {status && (
-            <dl className="grid" style={{ gridTemplateColumns: "repeat(2,1fr)" }}>
+  const handleNavigateTo = (tabId: string) => setActiveTab(tabId);
+
+  const renderDashboardTab = () => {
+    const compatibleCount = models.filter(
+      (m) => m.compatibility_status === "compatible"
+    ).length;
+    const recentRuns = runs.slice(0, 4);
+
+    return (
+      <>
+        <div className="grid grid-2">
+          <section className="card">
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
+              <h2>System Status</h2>
+              <span className={`status-pill ${summarizeStatus.badge}`}>
+                {summarizeStatus.state}
+              </span>
+            </div>
+            <p className="muted">{summarizeStatus.detail}</p>
+            <dl className="grid" style={{ gridTemplateColumns: "repeat(2, 1fr)" }}>
+              <div>
+                <dt className="muted">LLM API Status</dt>
+                <dd>{status ? summarizeStatus.state : "Offline"}</dd>
+              </div>
               <div>
                 <dt className="muted">GPU Allocated</dt>
-                <dd>{status.gpu_memory_allocated_mb?.toFixed(1) ?? "0"} MB</dd>
+                <dd>{status?.gpu_memory_allocated_mb?.toFixed(1) ?? "0.0"} MB</dd>
               </div>
               <div>
                 <dt className="muted">GPU Reserved</dt>
-                <dd>{status.gpu_memory_reserved_mb?.toFixed(1) ?? "0"} MB</dd>
+                <dd>{status?.gpu_memory_reserved_mb?.toFixed(1) ?? "0.0"} MB</dd>
+              </div>
+              <div>
+                <dt className="muted">Logging</dt>
+                <dd>{status?.performance_logging ? "Enabled" : "Disabled"}</dd>
               </div>
             </dl>
-          )}
-          {statusError && <p className="muted">{statusError}</p>}
-          <button className="btn" style={{ marginTop: 12 }} onClick={refreshStatus}>
-            Refresh Status
-          </button>
-        </section>
+            {statusError && <p className="muted">{statusError}</p>}
+            <button className="btn" style={{ marginTop: 12 }} onClick={refreshStatus}>
+              Refresh Status
+            </button>
+          </section>
+          <section className="card">
+            <h2>Quick Actions</h2>
+            <p className="muted">Jump straight into frequently used tools.</p>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <button className="btn" onClick={() => handleNavigateTo("runner")}>
+                Start Manual Test
+              </button>
+              <button className="btn" onClick={() => handleNavigateTo("registry")}>
+                Manage Models
+              </button>
+              <button className="btn" onClick={() => handleNavigateTo("results")}>
+                Review Results
+              </button>
+            </div>
+          </section>
+        </div>
+
+        <div className="grid grid-2">
+          <section className="card">
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
+              <h2>Recent Runs</h2>
+              <button className="btn" onClick={() => handleNavigateTo("results")}>
+                View All
+              </button>
+            </div>
+            {recentRuns.length === 0 && (
+              <p className="muted">No recent runs logged.</p>
+            )}
+            <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+              {recentRuns.map((run) => (
+                <li
+                  key={run.id}
+                  style={{
+                    borderBottom: "1px solid rgba(255,255,255,0.05)",
+                    padding: "8px 0",
+                  }}
+                >
+                  <strong>{run.model_name}</strong>
+                  <p className="muted" style={{ margin: 0 }}>
+                    {run.status} ·{" "}
+                    {new Date(run.started_at).toLocaleTimeString()}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          </section>
+
+          <section className="card">
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
+              <h2>Model Status</h2>
+              <button className="btn" onClick={() => handleNavigateTo("registry")}>
+                Manage Models
+              </button>
+            </div>
+            <p className="muted">
+              {compatibleCount} of {models.length} models marked compatible.
+            </p>
+            {renderModelsList()}
+          </section>
+        </div>
+
         <section className="card">
           <div style={{ display: "flex", justifyContent: "space-between" }}>
-            <h2>Registered Models</h2>
-            <button className="btn" onClick={refreshModels}>
-              Refresh
+            <h2>Log Stream</h2>
+            <button className="btn" onClick={refreshLogs}>
+              Refresh Logs
             </button>
           </div>
-          {renderModelsList()}
+          <div style={{ maxHeight: 260, overflowY: "auto" }}>
+            {renderLogsTable()}
+          </div>
         </section>
-      </div>
-      <section className="card">
-        <div style={{ display: "flex", justifyContent: "space-between" }}>
-          <h2>Log Stream</h2>
-          <button className="btn" onClick={refreshLogs}>
-            Refresh Logs
-          </button>
-        </div>
-        <div style={{ maxHeight: 260, overflowY: "auto" }}>{renderLogsTable()}</div>
-      </section>
-    </>
-  );
+      </>
+    );
+  };
 
   const renderRegistryTab = () => (
     <>
