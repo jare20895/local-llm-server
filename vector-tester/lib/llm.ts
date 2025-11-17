@@ -49,9 +49,5 @@ export async function fetchModels(base?: string): Promise<ModelSummary[]> {
 }
 
 export function getApiBase(): string {
-  return (
-    process.env.LLM_API_BASE ||
-    process.env.NEXT_PUBLIC_LLM_API_BASE ||
-    DEFAULT_BASE
-  );
+  return process.env.LLM_API_BASE ?? DEFAULT_BASE;
 }

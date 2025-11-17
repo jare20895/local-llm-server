@@ -1,0 +1,3 @@
+## Project Context
+
+- **Commit Template**: Follow `.gitmessage` for structured commits (type(scope): subject + [Motivation]/[Description]/[Testing]/[Issues]/[BreakingChange]/[Metadata]).

@@ -9,7 +9,6 @@ type Props = {
   initialLogs: LogEvent[];
   initialStatus: LlmStatus | null;
   initialModels: ModelSummary[];
-  apiBase: string;
 };
 
 export default function Dashboard({
@@ -17,7 +16,6 @@ export default function Dashboard({
   initialLogs,
   initialStatus,
   initialModels,
-  apiBase,
 }: Props) {
   const [form, setForm] = useState({
     model_name: "",
@@ -71,7 +69,7 @@ export default function Dashboard({
 
   const refreshStatus = useCallback(async () => {
     try {
-      const res = await fetch(`${apiBase}/api/status`);
+      const res = await fetch(`/api/llm/status`);
       if (!res.ok) {
         throw new Error(res.statusText);
       }
@@ -82,18 +80,19 @@ export default function Dashboard({
       setStatusError("Unable to reach llm-server");
       console.warn(error);
     }
-  }, [apiBase]);
+  }, []);
 
   const refreshModels = useCallback(async () => {
     try {
-      const res = await fetch(`${apiBase}/api/models`);
+      const res = await fetch(`/api/llm/models`);
       if (!res.ok) return;
-      const data = (await res.json()) as ModelSummary[];
+      const payload = await res.json();
+      const data = (payload.models ?? []) as ModelSummary[];
       setModels(data);
     } catch (error) {
       console.warn(error);
     }
-  }, [apiBase]);
+  }, []);
 
   useEffect(() => {
     const statusInterval = setInterval(() => {
