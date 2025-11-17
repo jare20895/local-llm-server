@@ -64,6 +64,11 @@ class ModelRegistry(SQLModel, table=True):
     update_available: bool = Field(default=False)  # Cached: is update available?
     last_update_check: Optional[datetime] = None   # When we last checked for updates
 
+    # Model-specific loading configuration (for hardware compatibility)
+    load_config: Optional[str] = Field(default=None)  # JSON string of loading params
+    compatibility_status: Optional[str] = Field(default="unknown")  # unknown, compatible, incompatible, degraded
+    compatibility_notes: Optional[str] = None   # Notes about compatibility issues or special requirements
+
     # This links a model to all its performance logs
     logs: List["PerformanceLog"] = Relationship(back_populates="model")
 
@@ -357,17 +362,25 @@ def get_local_model_commit(hf_path: str, cache_path: str) -> Optional[str]:
 
     # Convert HF path to cache directory name (e.g., "Qwen/Qwen2.5-3B" -> "models--Qwen--Qwen2.5-3B")
     org_model = hf_path.replace("/", "--")
-    model_cache_dir = os.path.join(cache_path, "hub", f"models--{org_model}")
-    refs_main = os.path.join(model_cache_dir, "refs", "main")
 
-    try:
-        if os.path.exists(refs_main):
-            # refs/main is a file containing the commit hash
-            with open(refs_main, 'r') as f:
-                commit = f.read().strip()
-                return commit
-    except Exception as e:
-        print(f"Error reading local commit for {hf_path}: {e}")
+    # HuggingFace can store models in two locations:
+    # 1. cache_path/hub/models--{org}--{model} (standard)
+    # 2. cache_path/models--{org}--{model} (direct, when cache_dir is set)
+    possible_locations = [
+        os.path.join(cache_path, "hub", f"models--{org_model}"),  # Standard location
+        os.path.join(cache_path, f"models--{org_model}"),          # Direct location
+    ]
+
+    for model_cache_dir in possible_locations:
+        refs_main = os.path.join(model_cache_dir, "refs", "main")
+        try:
+            if os.path.exists(refs_main):
+                # refs/main is a file containing the commit hash
+                with open(refs_main, 'r') as f:
+                    commit = f.read().strip()
+                    return commit
+        except Exception as e:
+            print(f"Error reading local commit for {hf_path} at {refs_main}: {e}")
 
     return None
 

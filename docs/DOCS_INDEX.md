@@ -7,7 +7,7 @@ Complete documentation for the Homelab LLM Server with ROCm GPU support on WSL2.
 ### Getting Started
 | Document | Purpose | When to Use |
 |----------|---------|-------------|
-| [README.md](README.md) | Project overview and features | First-time visitors |
+| [README.md](../README.md) | Project overview and features | First-time visitors |
 | [QUICKSTART.md](QUICKSTART.md) | 3-step quick start guide | Want to get running fast |
 | **[ROCM_SETUP_GUIDE.md](ROCM_SETUP_GUIDE.md)** | **Complete ROCm setup guide** | **Setting up AMD GPU in WSL2** |
 
@@ -24,6 +24,14 @@ Complete documentation for the Homelab LLM Server with ROCm GPU support on WSL2.
 | [FIX_WSL_GPU.md](FIX_WSL_GPU.md) | WSL GPU detection troubleshooting | GPU not detected |
 | [WSL_GPU_FIX_SUMMARY.md](WSL_GPU_FIX_SUMMARY.md) | Summary of GPU fix (PyTorch wheels) | Quick reference |
 | **[ROCM_SETUP_GUIDE.md](ROCM_SETUP_GUIDE.md)** | **Complete troubleshooting section** | **Comprehensive diagnostics** |
+
+### Model Management
+| Document | Purpose | When to Use |
+|----------|---------|-------------|
+| **[COMPATIBILITY_SYSTEM.md](COMPATIBILITY_SYSTEM.md)** | **Crash-resistant model compatibility tracking** | **Models crashing or failing to load** |
+| **[MODEL_DETAILS_MODAL.md](MODEL_DETAILS_MODAL.md)** | **Enhanced model details editing UI** | **Configure model settings, compatibility, benchmarks** |
+| [MODEL_UPDATE_MGR.md](MODEL_UPDATE_MGR.md) | Model version management | Updating models |
+| [MODEL_DOWNLOAD_PIPELINE.md](MODEL_DOWNLOAD_PIPELINE.md) | Download and caching pipeline | Understanding model downloads |
 
 ---
 
@@ -52,6 +60,15 @@ Complete documentation for the Homelab LLM Server with ROCm GPU support on WSL2.
 
 ### "Should I use venv or Docker?"
 → **[ROCM_SETUP_GUIDE.md - Environment Comparison](ROCM_SETUP_GUIDE.md#environment-comparison)**
+
+### "Model keeps crashing the server"
+→ **[COMPATIBILITY_SYSTEM.md](COMPATIBILITY_SYSTEM.md)** - Automatic crash detection
+
+### "I want to configure custom model loading parameters"
+→ **[MODEL_DETAILS_MODAL.md](MODEL_DETAILS_MODAL.md)** - Click model name to edit
+
+### "Model is marked incompatible but I want to retry"
+→ **[MODEL_DETAILS_MODAL.md - Reset Failed Model](MODEL_DETAILS_MODAL.md#3-reset-failed-model)**
 
 ---
 
@@ -239,13 +256,23 @@ volumes:
 ```
 /home/jare16/LLM/
 ├── README.md                    # Project overview
-├── DOCS_INDEX.md               # This file (navigation)
-├── ROCM_SETUP_GUIDE.md         # ⭐ Comprehensive ROCm setup
-├── QUICKSTART.md               # Quick start guide
-├── SETUP_LOCAL.md              # Local Python venv setup
-├── DOCKER.md                   # Docker deployment
-├── FIX_WSL_GPU.md             # WSL GPU troubleshooting
-├── WSL_GPU_FIX_SUMMARY.md     # GPU fix summary
+├── docs/                        # Documentation folder
+│   ├── DOCS_INDEX.md           # This file (navigation)
+│   ├── ROCM_SETUP_GUIDE.md     # ⭐ Comprehensive ROCm setup
+│   ├── COMPATIBILITY_SYSTEM.md # Model compatibility tracking
+│   ├── MODEL_DETAILS_MODAL.md  # Enhanced model editing UI
+│   ├── QUICKSTART.md           # Quick start guide
+│   ├── SETUP_LOCAL.md          # Local Python venv setup
+│   ├── DOCKER.md               # Docker deployment
+│   ├── FIX_WSL_GPU.md         # WSL GPU troubleshooting
+│   ├── WSL_GPU_FIX_SUMMARY.md # GPU fix summary
+│   ├── MODEL_UPDATE_MGR.md    # Model version management
+│   ├── MODEL_DOWNLOAD_PIPELINE.md # Download pipeline
+│   ├── CACHE_MANAGEMENT.md    # Cache system
+│   ├── CACHE_STRUCTURE.md     # Cache organization
+│   ├── CACHE_BEHAVIOR.md      # Cache behavior
+│   ├── CACHE_CLEANUP_GUIDE.md # Cleanup procedures
+│   └── BLOB_SYSTEM_EXPLAINED.md # HuggingFace blob system
 ├── setup_rocm.sh              # Automated PyTorch setup
 ├── verify_gpu.py              # GPU verification script
 ├── start.sh                   # Start server script
@@ -365,4 +392,7 @@ When updating documentation:
 
 **Last Updated:** 2025-11-16
 
-**Need help?** Start with [ROCM_SETUP_GUIDE.md](ROCM_SETUP_GUIDE.md) for comprehensive setup and troubleshooting.
+**Need help?**
+- Setup: [ROCM_SETUP_GUIDE.md](ROCM_SETUP_GUIDE.md)
+- Model crashes: [COMPATIBILITY_SYSTEM.md](COMPATIBILITY_SYSTEM.md)
+- Model configuration: [MODEL_DETAILS_MODAL.md](MODEL_DETAILS_MODAL.md)

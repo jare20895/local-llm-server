@@ -118,6 +118,18 @@ function createModelCard(model) {
         return score !== null && score !== undefined ? score.toFixed(1) : '-';
     };
 
+    // Get compatibility badge color
+    const getCompatBadgeStyle = (status) => {
+        const styles = {
+            'compatible': 'background: #d4edda; color: #155724; border: 1px solid #c3e6cb;',
+            'incompatible': 'background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb;',
+            'degraded': 'background: #fff3cd; color: #856404; border: 1px solid #ffeeba;',
+            'testing': 'background: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb;',
+            'unknown': 'background: #e2e3e5; color: #383d41; border: 1px solid #d6d8db;'
+        };
+        return styles[status] || styles['unknown'];
+    };
+
     // Build benchmark scores section if any are available
     const hasBenchmarks = model.mmlu_score || model.gpqa_score || model.hellaswag_score ||
                          model.humaneval_score || model.mbpp_score || model.math_score ||
@@ -141,8 +153,15 @@ function createModelCard(model) {
     }
 
     card.innerHTML = `
-        <h4>${model.model_name}</h4>
+        <h4 style="cursor: pointer; color: #007bff;" onclick="showEditDetailsModal('${model.model_name}')" title="Click to edit model details">${model.model_name}</h4>
         <p><strong>HF Path:</strong> ${model.hf_path}</p>
+        ${model.compatibility_status && model.compatibility_status !== 'unknown' ? `
+            <p><strong>Compatibility:</strong>
+                <span class="metric-badge" style="${getCompatBadgeStyle(model.compatibility_status)}padding: 2px 8px; border-radius: 4px; font-size: 0.85em;">
+                    ${model.compatibility_status.toUpperCase()}
+                </span>
+            </p>
+        ` : ''}
         ${model.parameter_count ? `<p><strong>Parameters:</strong> ${(model.parameter_count / 1e9).toFixed(2)}B</p>` : ''}
         ${model.architecture ? `<p><strong>Architecture:</strong> ${model.architecture}</p>` : ''}
         ${model.default_dtype ? `<p><strong>Tensor Type:</strong> ${model.default_dtype}</p>` : ''}
@@ -179,7 +198,42 @@ function createModelCard(model) {
 }
 
 async function loadModelToMemory(modelName) {
-    if (!confirm(`Load model "${modelName}"? This may take a few minutes.`)) {
+    // First, check the model's compatibility status
+    let model = null;
+    try {
+        const modelsResponse = await fetch(`${API_BASE}/api/models`);
+        const models = await modelsResponse.json();
+        model = models.find(m => m.model_name === modelName);
+    } catch (error) {
+        console.error('Failed to fetch model info:', error);
+    }
+
+    // Show appropriate warning based on compatibility status
+    let confirmMessage = `Load model "${modelName}"? This may take a few minutes.`;
+    let forceLoad = false;
+
+    if (model) {
+        if (model.compatibility_status === 'incompatible') {
+            confirmMessage = `⚠️ WARNING: "${modelName}" is marked as INCOMPATIBLE with this hardware!\n\n` +
+                           `This model has failed to load previously and may crash the server.\n\n` +
+                           (model.compatibility_notes ? `Notes: ${model.compatibility_notes}\n\n` : '') +
+                           `Do you want to retry loading anyway? (This will use force_load=true)`;
+            forceLoad = true;
+        } else if (model.compatibility_status === 'degraded') {
+            confirmMessage = `⚠️ WARNING: "${modelName}" has DEGRADED compatibility!\n\n` +
+                           `This model has loaded successfully before but recently failed.\n` +
+                           `This might be a temporary issue (WSL/GPU reset needed).\n\n` +
+                           (model.compatibility_notes ? `Notes: ${model.compatibility_notes}\n\n` : '') +
+                           `Do you want to try loading anyway?`;
+        } else if (model.compatibility_status === 'testing') {
+            confirmMessage = `⚠️ NOTICE: "${modelName}" is currently being tested or a previous test was interrupted.\n\n` +
+                           `The previous load attempt may have crashed the server.\n\n` +
+                           `Do you want to retry loading?`;
+            forceLoad = true; // Treat testing status as incompatible for retry
+        }
+    }
+
+    if (!confirm(confirmMessage)) {
         return;
     }
 
@@ -187,19 +241,27 @@ async function loadModelToMemory(modelName) {
         const response = await fetch(`${API_BASE}/api/orchestrate/load`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model_name: modelName })
+            body: JSON.stringify({
+                model_name: modelName,
+                force_load: forceLoad
+            })
         });
 
         const data = await response.json();
 
         if (response.ok) {
-            alert(`Model loaded successfully!\nParameters: ${data.parameter_count?.toLocaleString() || 'Unknown'}`);
+            alert(`✅ Model loaded successfully!\n\n` +
+                  `Parameters: ${data.parameter_count?.toLocaleString() || 'Unknown'}\n` +
+                  `Compatibility: ${data.compatibility_status || 'unknown'}`);
             refreshStatus();
+            loadModels(); // Refresh to show updated compatibility status
         } else {
-            alert(`Failed to load model: ${data.detail}`);
+            alert(`❌ Failed to load model: ${data.detail}`);
+            loadModels(); // Refresh to show updated compatibility status
         }
     } catch (error) {
-        alert(`Error loading model: ${error.message}`);
+        alert(`❌ Error loading model: ${error.message}`);
+        loadModels(); // Refresh to show updated compatibility status
     }
 }
 
@@ -916,5 +978,148 @@ function updateCacheDisplay(cacheType, cacheData) {
     const freeEl = document.getElementById(`${prefix}-disk-free`);
     if (freeEl) {
         freeEl.textContent = cacheData.disk_free || '-';
+    }
+}
+
+
+// ===========================================================================
+// Enhanced Model Details Editing (Full Configuration)
+// ===========================================================================
+
+let currentEditingDetailsModel = null;
+
+async function showEditDetailsModal(modelName) {
+    console.log('showEditDetailsModal called for:', modelName);
+    currentEditingDetailsModel = modelName;
+
+    // Fetch current model data
+    try {
+        const response = await fetch(`${API_BASE}/api/models`);
+        const models = await response.json();
+        console.log('All models:', models);
+        const model = models.find(m => m.model_name === modelName);
+
+        if (!model) {
+            alert('Model not found');
+            console.error('Model not found:', modelName);
+            return;
+        }
+
+        console.log('Found model:', model);
+
+        // Populate form with current values
+        document.getElementById('edit-details-model-name').textContent = modelName;
+
+        // Basic info (read-only)
+        document.getElementById('details-hf-path').value = model.hf_path || '';
+        document.getElementById('details-cache-location').value = model.cache_location || 'primary';
+
+        // Compatibility configuration
+        document.getElementById('details-compat-status').value = model.compatibility_status || 'unknown';
+        document.getElementById('details-compat-notes').value = model.compatibility_notes || '';
+        document.getElementById('details-load-config').value = model.load_config || '';
+
+        // Benchmark metrics
+        document.getElementById('details-mmlu').value = model.mmlu_score || '';
+        document.getElementById('details-gpqa').value = model.gpqa_score || '';
+        document.getElementById('details-hellaswag').value = model.hellaswag_score || '';
+        document.getElementById('details-humaneval').value = model.humaneval_score || '';
+        document.getElementById('details-mbpp').value = model.mbpp_score || '';
+        document.getElementById('details-math').value = model.math_score || '';
+        document.getElementById('details-truthfulqa').value = model.truthfulqa_score || '';
+        document.getElementById('details-perplexity').value = model.perplexity || '';
+
+        // Operational metrics
+        document.getElementById('details-throughput').value = model.max_throughput_tokens_sec || '';
+        document.getElementById('details-latency').value = model.avg_latency_ms || '';
+        document.getElementById('details-quantization').value = model.quantization || '';
+
+        console.log('About to show modal...');
+        const modal = document.getElementById('edit-details-modal');
+        console.log('Modal element:', modal);
+        modal.classList.add('active');
+        console.log('Modal should now be visible. Classes:', modal.classList);
+    } catch (error) {
+        console.error('Error in showEditDetailsModal:', error);
+        alert(`Error loading model data: ${error.message}`);
+    }
+}
+
+function closeEditDetailsModal() {
+    document.getElementById('edit-details-modal').classList.remove('active');
+    document.getElementById('edit-details-form').reset();
+    currentEditingDetailsModel = null;
+}
+
+async function updateModelDetails(event) {
+    event.preventDefault();
+
+    if (!currentEditingDetailsModel) {
+        alert('No model selected');
+        return;
+    }
+
+    // Validate JSON format for load_config
+    const loadConfigText = document.getElementById('details-load-config').value.trim();
+    if (loadConfigText) {
+        try {
+            JSON.parse(loadConfigText);
+        } catch (e) {
+            alert('Invalid JSON in Load Configuration field. Please check the format.');
+            return;
+        }
+    }
+
+    try {
+        // First, update compatibility configuration
+        const configData = {
+            compatibility_status: document.getElementById('details-compat-status').value,
+            compatibility_notes: document.getElementById('details-compat-notes').value || null,
+            load_config: loadConfigText || null
+        };
+
+        const configResponse = await fetch(`${API_BASE}/api/models/${currentEditingDetailsModel}/config`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(configData)
+        });
+
+        if (!configResponse.ok) {
+            const error = await configResponse.json();
+            throw new Error(`Failed to update config: ${error.detail}`);
+        }
+
+        // Second, update metadata/metrics
+        const metadataData = {
+            mmlu_score: parseFloat(document.getElementById('details-mmlu').value) || null,
+            gpqa_score: parseFloat(document.getElementById('details-gpqa').value) || null,
+            hellaswag_score: parseFloat(document.getElementById('details-hellaswag').value) || null,
+            humaneval_score: parseFloat(document.getElementById('details-humaneval').value) || null,
+            mbpp_score: parseFloat(document.getElementById('details-mbpp').value) || null,
+            math_score: parseFloat(document.getElementById('details-math').value) || null,
+            truthfulqa_score: parseFloat(document.getElementById('details-truthfulqa').value) || null,
+            perplexity: parseFloat(document.getElementById('details-perplexity').value) || null,
+            max_throughput_tokens_sec: parseFloat(document.getElementById('details-throughput').value) || null,
+            avg_latency_ms: parseFloat(document.getElementById('details-latency').value) || null,
+            quantization: document.getElementById('details-quantization').value || null
+        };
+
+        const metadataResponse = await fetch(`${API_BASE}/api/models/${currentEditingDetailsModel}/metadata`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(metadataData)
+        });
+
+        if (!metadataResponse.ok) {
+            const error = await metadataResponse.json();
+            throw new Error(`Failed to update metadata: ${error.detail}`);
+        }
+
+        alert('Model details updated successfully!');
+        closeEditDetailsModal();
+        loadModels();
+
+    } catch (error) {
+        alert(`Error updating model details: ${error.message}`);
     }
 }

@@ -445,6 +445,127 @@
         </div>
     </div>
 
+    <!-- Modal for editing full model details (advanced) -->
+    <div id="edit-details-modal" class="modal">
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <h3>Edit Model Details: <span id="edit-details-model-name"></span></h3>
+                <span class="close" onclick="closeEditDetailsModal()">&times;</span>
+            </div>
+            <form id="edit-details-form" onsubmit="updateModelDetails(event)">
+                <!-- Model Information (Read-only) -->
+                <h4>Model Information</h4>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>HuggingFace Path</label>
+                        <input type="text" id="details-hf-path" readonly style="background: #f5f5f5;">
+                    </div>
+                    <div class="form-group">
+                        <label>Cache Location</label>
+                        <input type="text" id="details-cache-location" readonly style="background: #f5f5f5;">
+                    </div>
+                </div>
+
+                <!-- Compatibility Configuration -->
+                <h4 style="margin-top: 20px;">Compatibility Configuration</h4>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="details-compat-status">Compatibility Status</label>
+                        <select id="details-compat-status">
+                            <option value="unknown">Unknown</option>
+                            <option value="compatible">Compatible</option>
+                            <option value="incompatible">Incompatible</option>
+                            <option value="degraded">Degraded</option>
+                            <option value="testing">Testing</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="details-compat-notes">Compatibility Notes</label>
+                    <textarea id="details-compat-notes" rows="3"
+                        placeholder="Notes about compatibility issues or special requirements"></textarea>
+                </div>
+
+                <div class="form-group">
+                    <label for="details-load-config">Custom Load Configuration (JSON)</label>
+                    <textarea id="details-load-config" rows="6"
+                        placeholder='{"torch_dtype": "bfloat16", "attn_implementation": "eager", "device_map": "auto"}'></textarea>
+                    <small style="color: #666;">JSON object with custom loading parameters. Leave empty to use defaults.</small>
+                </div>
+
+                <!-- Benchmark Metrics (Collapsible) -->
+                <details style="margin-top: 20px;">
+                    <summary style="cursor: pointer; font-weight: bold; font-size: 1.1em; margin-bottom: 10px;">
+                        📊 Benchmark Metrics (Click to expand)
+                    </summary>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="details-mmlu">MMLU</label>
+                            <input type="number" id="details-mmlu" step="0.1" min="0" max="100">
+                        </div>
+                        <div class="form-group">
+                            <label for="details-gpqa">GPQA</label>
+                            <input type="number" id="details-gpqa" step="0.1" min="0" max="100">
+                        </div>
+                        <div class="form-group">
+                            <label for="details-hellaswag">HellaSwag</label>
+                            <input type="number" id="details-hellaswag" step="0.1" min="0" max="100">
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="details-humaneval">HumanEval</label>
+                            <input type="number" id="details-humaneval" step="0.1" min="0" max="100">
+                        </div>
+                        <div class="form-group">
+                            <label for="details-mbpp">MBPP</label>
+                            <input type="number" id="details-mbpp" step="0.1" min="0" max="100">
+                        </div>
+                        <div class="form-group">
+                            <label for="details-math">MATH</label>
+                            <input type="number" id="details-math" step="0.1" min="0" max="100">
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="details-truthfulqa">TruthfulQA</label>
+                            <input type="number" id="details-truthfulqa" step="0.1" min="0" max="100">
+                        </div>
+                        <div class="form-group">
+                            <label for="details-perplexity">Perplexity</label>
+                            <input type="number" id="details-perplexity" step="0.1" min="0">
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="details-throughput">Max Throughput (tok/s)</label>
+                            <input type="number" id="details-throughput" step="0.1" min="0">
+                        </div>
+                        <div class="form-group">
+                            <label for="details-latency">Avg Latency TTFT (ms)</label>
+                            <input type="number" id="details-latency" step="0.1" min="0">
+                        </div>
+                        <div class="form-group">
+                            <label for="details-quantization">Quantization</label>
+                            <input type="text" id="details-quantization">
+                        </div>
+                    </div>
+                </details>
+
+                <div class="modal-footer" style="margin-top: 20px;">
+                    <button type="button" class="btn btn-secondary"
+                        onclick="closeEditDetailsModal()">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save All Changes</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <script src="/static/app.js"></script>
 </body>
 </html>

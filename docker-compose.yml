@@ -40,6 +40,8 @@ services:
       # Hugging Face settings
       - HF_HOME=/root/.cache/huggingface
       - PRIMARY_CACHE_PATH=/root/.cache/huggingface
+      - TRANSFORMERS_NO_ADVISORY_WARNINGS=1
+      - DISABLE_FLASH_ATTENTION=1
       # Database path
       - DATABASE_PATH=/app/data/models.db
       # Optional: Hugging Face token

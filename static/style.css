@@ -383,6 +383,13 @@ body {
     font-weight: 600;
     margin-bottom: 8px;
     color: var(--primary-color);
+    transition: all 0.2s;
+}
+
+.model-card h4:hover {
+    color: var(--primary-dark);
+    text-decoration: underline;
+    transform: translateX(2px);
 }
 
 .model-card p {

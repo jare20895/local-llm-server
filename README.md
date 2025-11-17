@@ -39,13 +39,13 @@ The system consists of three main components:
 
 ### Quick Start (AMD GPU with ROCm)
 
-**For AMD GPUs in WSL2:** See [ROCM_SETUP_GUIDE.md](ROCM_SETUP_GUIDE.md) for the complete setup guide covering:
+**For AMD GPUs in WSL2:** See [docs/ROCM_SETUP_GUIDE.md](docs/ROCM_SETUP_GUIDE.md) for the complete setup guide covering:
 - Python virtual environment setup
 - Docker environment setup
 - Troubleshooting and diagnostics
 - Environment comparison
 
-**Quick 3-step setup:** See [QUICKSTART.md](QUICKSTART.md)
+**Quick 3-step setup:** See [docs/QUICKSTART.md](docs/QUICKSTART.md)
 
 ```bash
 # Install ROCm PyTorch
@@ -74,7 +74,7 @@ The server will start on `http://localhost:8000`
 
 ### Docker Installation (Recommended)
 
-See [DOCKER.md](DOCKER.md) for complete Docker setup with ROCm GPU support.
+See [docs/DOCKER.md](docs/DOCKER.md) for complete Docker setup with ROCm GPU support.
 
 ```bash
 docker-compose up -d
@@ -259,7 +259,7 @@ This disables collection of detailed metrics but still returns basic generation 
 2. **Database**: The SQLite file `models.db` is created automatically
 3. **GPU**: Supports both CUDA (NVIDIA) and ROCm (AMD) GPUs
 4. **Memory**: Ensure sufficient VRAM for your models (16GB recommended)
-5. **Docker**: Use Docker for consistent deployment (see [DOCKER.md](DOCKER.md))
+5. **Docker**: Use Docker for consistent deployment (see [docs/DOCKER.md](docs/DOCKER.md))
 
 ## Troubleshooting
 
@@ -267,7 +267,7 @@ This disables collection of detailed metrics but still returns basic generation 
 - **PyTorch SOURCE matters!** Use AMD wheels from repo.radeon.com, NOT pytorch.org
 - **WSL requires fix:** Must remove bundled libhsa-runtime64.so for GPU detection
 - Quick fix: Run `./setup_rocm.sh` (handles AMD wheels + WSL fix automatically)
-- See [SETUP_LOCAL.md](SETUP_LOCAL.md) for detailed AMD GPU setup
+- See [docs/SETUP_LOCAL.md](docs/SETUP_LOCAL.md) for detailed AMD GPU setup
 - **Key insight:** PyTorch.org wheels don't include WSL compatibility fixes. Always use AMD-recommended wheels for WSL:
   ```bash
   # ❌ Wrong (pytorch.org):
@@ -292,11 +292,14 @@ This disables collection of detailed metrics but still returns basic generation 
 - Check database write permissions
 
 **For more help:**
-- **Complete ROCm guide:** [ROCM_SETUP_GUIDE.md](ROCM_SETUP_GUIDE.md) - Comprehensive setup for Python venv and Docker
-- Local setup: [SETUP_LOCAL.md](SETUP_LOCAL.md)
-- Docker setup: [DOCKER.md](DOCKER.md)
-- Quick reference: [QUICKSTART.md](QUICKSTART.md)
-- GPU troubleshooting: [FIX_WSL_GPU.md](FIX_WSL_GPU.md)
+- **Complete ROCm guide:** [docs/ROCM_SETUP_GUIDE.md](docs/ROCM_SETUP_GUIDE.md) - Comprehensive setup for Python venv and Docker
+- **Model compatibility system:** [docs/COMPATIBILITY_SYSTEM.md](docs/COMPATIBILITY_SYSTEM.md) - Crash-resistant model tracking
+- **Model details modal:** [docs/MODEL_DETAILS_MODAL.md](docs/MODEL_DETAILS_MODAL.md) - Configure model settings
+- Local setup: [docs/SETUP_LOCAL.md](docs/SETUP_LOCAL.md)
+- Docker setup: [docs/DOCKER.md](docs/DOCKER.md)
+- Quick reference: [docs/QUICKSTART.md](docs/QUICKSTART.md)
+- GPU troubleshooting: [docs/FIX_WSL_GPU.md](docs/FIX_WSL_GPU.md)
+- **Documentation index:** [docs/DOCS_INDEX.md](docs/DOCS_INDEX.md) - Complete documentation navigation
 
 ## License
 

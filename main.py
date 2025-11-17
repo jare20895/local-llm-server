@@ -49,7 +49,7 @@ class ModelManager:
 
     def load(
         self, hf_path: str, model_name: str, model_id: int, trust_remote_code: bool,
-        cache_dir: Optional[str] = None
+        cache_dir: Optional[str] = None, load_config_json: Optional[str] = None
     ):
         """Load a model into VRAM from specified cache location."""
         # 1. Unload any previous model
@@ -60,16 +60,51 @@ class ModelManager:
         try:
             dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
 
-            # Load model with custom cache directory if specified
+            # Default load kwargs (safe defaults for ROCm/WSL)
             load_kwargs = {
-                "torch_dtype": dtype,
+                "torch_dtype": dtype,  # Using torch_dtype for compatibility with older transformers
                 "device_map": "auto",
                 "trust_remote_code": trust_remote_code,
+                "attn_implementation": "eager",  # Use eager attention for ROCm/WSL compatibility
             }
+
+            # Override with model-specific config if provided
+            if load_config_json:
+                try:
+                    custom_config = json.loads(load_config_json)
+                    print(f"📝 Using custom load config: {custom_config}")
+                    load_kwargs.update(custom_config)
+                except Exception as e:
+                    print(f"⚠️  Failed to parse load_config, using defaults: {e}")
 
             if cache_dir:
                 # Set cache directory for HuggingFace transformers
                 load_kwargs["cache_dir"] = cache_dir
+
+            # Workaround for Phi-3 and other models that check flash-attention early
+            # Set environment variable to disable flash-attention before model import
+            import os
+            os.environ['FLASH_ATTENTION_SKIP_CUDA_BUILD'] = '1'
+
+            # For problematic models, try to load config first and force eager attention
+            try:
+                from transformers import AutoConfig
+                config = AutoConfig.from_pretrained(
+                    hf_path,
+                    trust_remote_code=trust_remote_code,
+                    cache_dir=cache_dir if cache_dir else None
+                )
+                # Force eager attention in config
+                if hasattr(config, '_attn_implementation'):
+                    config._attn_implementation = 'eager'
+                if hasattr(config, 'attn_implementation'):
+                    config.attn_implementation = 'eager'
+                # For Phi models specifically
+                if 'Phi' in config.model_type or 'phi' in str(config.architectures):
+                    print(f"Detected Phi model - forcing eager attention for ROCm compatibility")
+                load_kwargs["config"] = config
+            except Exception as e:
+                print(f"Note: Could not pre-configure attention implementation: {e}")
 
             self.model = AutoModelForCausalLM.from_pretrained(
                 hf_path,
@@ -163,6 +198,7 @@ class ModelLoadRequest(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
     model_name: str = Field(..., description="Name of the model to load")
+    force_load: bool = Field(default=False, description="Force load even if marked incompatible (for retesting)")
 
 
 class PromptRequest(BaseModel):
@@ -194,6 +230,15 @@ class ModelMetadataUpdateRequest(BaseModel):
     max_throughput_tokens_sec: Optional[float] = None
     avg_latency_ms: Optional[float] = None
     quantization: Optional[str] = None
+
+
+class ModelConfigUpdateRequest(BaseModel):
+    """Request model for updating model-specific configuration."""
+    model_config = ConfigDict(protected_namespaces=())
+
+    load_config: Optional[str] = Field(default=None, description="JSON string of model loading parameters")
+    compatibility_status: Optional[str] = Field(default=None, description="Compatibility status: unknown, compatible, incompatible, degraded")
+    compatibility_notes: Optional[str] = Field(default=None, description="Notes about compatibility issues")
 
 
 class ModelResponse(BaseModel):
@@ -237,6 +282,11 @@ class ModelResponse(BaseModel):
     total_inferences: int = 0
     last_loaded: Optional[datetime] = None
 
+    # Model-specific configuration
+    load_config: Optional[str] = None
+    compatibility_status: Optional[str] = "unknown"
+    compatibility_notes: Optional[str] = None
+
 
 class StatusResponse(BaseModel):
     loaded_model: Optional[str]
@@ -276,6 +326,27 @@ async def lifespan(app: FastAPI):
     """Handle startup and shutdown events."""
     # Startup
     create_db_and_tables()
+
+    # Check for models stuck in "testing" status (from server crashes)
+    with Session(engine) as session:
+        testing_models = session.exec(
+            select(ModelRegistry).where(ModelRegistry.compatibility_status == "testing")
+        ).all()
+
+        if testing_models:
+            print(f"⚠️  Found {len(testing_models)} model(s) stuck in 'testing' status from previous crash")
+            for model in testing_models:
+                # Mark as incompatible since the test didn't complete successfully
+                model.compatibility_status = "incompatible"
+                old_notes = model.compatibility_notes or ""
+                crash_note = f"[Server crashed during compatibility test on {datetime.now().strftime('%Y-%m-%d %H:%M')}]"
+                model.compatibility_notes = f"{crash_note} {old_notes}".strip()
+                session.add(model)
+                print(f"   - Marked '{model.model_name}' as incompatible (crashed during test)")
+
+            session.commit()
+            print("✅ Compatibility status cleanup completed")
+
     cache_manager.start_monitoring()
     print("🚀 Homelab LLM Server started")
     yield
@@ -414,6 +485,58 @@ def update_model_metadata(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Model '{model_name}' not found",
         )
+
+    # Update only the fields that are provided (not None)
+    update_data = request.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(model, key, value)
+
+    session.add(model)
+    session.commit()
+    session.refresh(model)
+
+    return model
+
+
+@app.patch(
+    "/api/models/{model_name}/config",
+    response_model=ModelResponse,
+    tags=["Model Registry"],
+)
+def update_model_config(
+    model_name: str,
+    request: ModelConfigUpdateRequest,
+    session: Session = Depends(get_db_session),
+):
+    """Update model-specific configuration (load params, compatibility status)."""
+    model = session.exec(
+        select(ModelRegistry).where(ModelRegistry.model_name == model_name)
+    ).first()
+
+    if not model:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Model '{model_name}' not found",
+        )
+
+    # Validate load_config is valid JSON if provided
+    if request.load_config is not None:
+        try:
+            json.loads(request.load_config)
+        except json.JSONDecodeError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="load_config must be valid JSON",
+            )
+
+    # Validate compatibility_status
+    if request.compatibility_status is not None:
+        valid_statuses = ["unknown", "compatible", "incompatible", "degraded"]
+        if request.compatibility_status not in valid_statuses:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"compatibility_status must be one of: {valid_statuses}",
+            )
 
     # Update only the fields that are provided (not None)
     update_data = request.model_dump(exclude_unset=True)
@@ -710,7 +833,33 @@ def load_model(request: ModelLoadRequest, session: Session = Depends(get_db_sess
             detail=f"Model '{request.model_name}' not found in registry. Register it first.",
         )
 
-    # Load the model with cache location
+    # Check compatibility status (unless force_load is True)
+    if model.compatibility_status == "incompatible" and not request.force_load:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Model '{request.model_name}' is marked as incompatible with this hardware. "
+                   f"Notes: {model.compatibility_notes or 'No details available'}. "
+                   f"Use force_load=true to retry anyway.",
+        )
+
+    # Warn about degraded models (but allow loading)
+    if model.compatibility_status == "degraded":
+        print(f"⚠️  Loading degraded model '{request.model_name}' - may have intermittent issues. "
+              f"Notes: {model.compatibility_notes or 'Unknown issue'}")
+
+    # Log force load attempt
+    if request.force_load and model.compatibility_status == "incompatible":
+        print(f"⚠️  Force loading incompatible model '{request.model_name}' - testing for intermittent issues")
+
+    # IMPORTANT: Update database BEFORE attempting to load to track compatibility testing
+    # This ensures that even if the server crashes, we have a record of the attempt
+    original_status = model.compatibility_status
+    model.compatibility_status = "testing"
+    session.add(model)
+    session.commit()
+    print(f"🔍 Testing compatibility for '{request.model_name}'...")
+
+    # Load the model with cache location and custom config
     try:
         model_manager.load(
             hf_path=model.hf_path,
@@ -718,7 +867,15 @@ def load_model(request: ModelLoadRequest, session: Session = Depends(get_db_sess
             model_id=model.id,
             trust_remote_code=model.trust_remote_code,
             cache_dir=model.cache_path,
+            load_config_json=model.load_config,
         )
+
+        # Mark as compatible on successful load
+        if original_status == "unknown" or original_status == "testing":
+            model.compatibility_status = "compatible"
+        else:
+            # Restore original status if it was already set (e.g., degraded)
+            model.compatibility_status = original_status
 
         # Update model metadata in registry
         model.total_loads += 1
@@ -772,8 +929,38 @@ def load_model(request: ModelLoadRequest, session: Session = Depends(get_db_sess
             "model_id": model.id,
             "parameter_count": model.parameter_count,
             "model_type": model.model_type,
+            "compatibility_status": model.compatibility_status,
         }
     except Exception as e:
+        # Check if it's a flash-attention or ROCm compatibility issue
+        error_str = str(e)
+
+        # Determine compatibility status based on error type and history
+        if "flash-attention" in error_str.lower() or "createcontext" in error_str.lower() or \
+           "assertion" in error_str.lower() or "aborted" in error_str.lower():
+            # Intermittent issue detection: if model loaded successfully 3+ times before,
+            # it's likely a transient issue (WSL GPU reset, driver glitch, etc.)
+            if model.total_loads >= 3:
+                model.compatibility_status = "degraded"
+                model.compatibility_notes = f"Intermittent issue detected (loaded successfully {model.total_loads} times before). " \
+                                          f"May require WSL/GPU restart. Error: {error_str[:150]}"
+                print(f"⚠️  Intermittent issue detected for '{model.model_name}' - marking as degraded (was loaded {model.total_loads} times successfully)")
+            else:
+                # Permanent incompatibility - model has never/rarely loaded successfully
+                model.compatibility_status = "incompatible"
+                model.compatibility_notes = f"Hardware incompatibility detected: {error_str[:200]}"
+                print(f"❌ Marking '{model.model_name}' as incompatible - no successful load history")
+        else:
+            # Generic error - mark as incompatible but with generic message
+            model.compatibility_status = "incompatible"
+            model.compatibility_notes = f"Load failed with error: {error_str[:200]}"
+            print(f"❌ Marking '{model.model_name}' as incompatible - generic load error")
+
+        # CRITICAL: Save to database even if server crashes after this
+        session.add(model)
+        session.commit()
+        print(f"💾 Compatibility status saved to database: {model.compatibility_status}")
+
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to load model: {str(e)}",
