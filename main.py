@@ -2,6 +2,7 @@
 import torch
 import time
 import os
+import re
 import psutil
 import json
 import threading
@@ -13,8 +14,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlmodel import Session, select
+from sqlalchemy import func
 from transformers import AutoTokenizer, AutoModelForCausalLM, TextIteratorStreamer
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 
 # --- Database Setup ---
 from database import (
@@ -36,6 +38,26 @@ from database import (
 from cache_manager import CacheManager
 
 
+def _normalize_string(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    return value.strip()
+
+
+def normalize_model_name(value: str) -> str:
+    """Trim whitespace from model names."""
+    normalized = _normalize_string(value)
+    return normalized or ""
+
+
+def normalize_hf_path(value: str) -> str:
+    """Trim whitespace around Hugging Face path segments."""
+    normalized = _normalize_string(value)
+    if not normalized:
+        return ""
+    return re.sub(r"\s*/\s*", "/", normalized)
+
+
 # --- Global State: The Model Manager ---
 class ModelManager:
     """Manages the in-memory model state (singleton)."""
@@ -54,6 +76,7 @@ class ModelManager:
         """Load a model into VRAM from specified cache location."""
         # 1. Unload any previous model
         self.unload()
+        model_name = normalize_model_name(model_name)
 
         cache_info = f" (cache: {cache_dir})" if cache_dir else ""
         print(f"🔄 Loading model: {model_name} from {hf_path}{cache_info}...")
@@ -193,12 +216,48 @@ class ModelCreateRequest(BaseModel):
         default=5000, description="Estimated model size in MB for space checking"
     )
 
+    @field_validator("model_name", mode="before")
+    @classmethod
+    def validate_model_name(cls, value: str) -> str:
+        if isinstance(value, str):
+            value = normalize_model_name(value)
+        if not value:
+            raise ValueError("model_name cannot be blank")
+        return value
+
+    @field_validator("hf_path", mode="before")
+    @classmethod
+    def validate_hf_path(cls, value: str) -> str:
+        if isinstance(value, str):
+            value = normalize_hf_path(value)
+        if not value:
+            raise ValueError("hf_path cannot be blank")
+        return value
+
+    @field_validator("cache_path", mode="before")
+    @classmethod
+    def validate_cache_path(cls, value: Optional[str]) -> Optional[str]:
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                return None
+        return value
+
 
 class ModelLoadRequest(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
     model_name: str = Field(..., description="Name of the model to load")
     force_load: bool = Field(default=False, description="Force load even if marked incompatible (for retesting)")
+
+    @field_validator("model_name", mode="before")
+    @classmethod
+    def validate_model_name(cls, value: str) -> str:
+        if isinstance(value, str):
+            value = normalize_model_name(value)
+        if not value:
+            raise ValueError("model_name cannot be blank")
+        return value
 
 
 class PromptRequest(BaseModel):
@@ -383,6 +442,62 @@ def get_db_session():
         yield session
 
 
+def _normalize_model_record(
+    session: Session, model: ModelRegistry, normalized_name: str
+) -> ModelRegistry:
+    """Ensure model name/hf_path lack stray whitespace, persisting if possible."""
+    updated = False
+    cleaned_hf_path: Optional[str] = None
+
+    if normalized_name and model.model_name != normalized_name:
+        model.model_name = normalized_name
+        updated = True
+
+    if model.hf_path:
+        cleaned_hf_path = normalize_hf_path(model.hf_path)
+        if cleaned_hf_path != model.hf_path:
+            model.hf_path = cleaned_hf_path
+            updated = True
+
+    if updated:
+        try:
+            session.add(model)
+            session.commit()
+        except Exception as exc:
+            session.rollback()
+            # Keep normalized values for the current request even if persisting failed
+            model.model_name = normalized_name or model.model_name
+            if cleaned_hf_path is not None:
+                model.hf_path = cleaned_hf_path
+            print(f"Warning: failed to normalize model record {model.id}: {exc}")
+
+    return model
+
+
+def get_model_by_name(session: Session, model_name: str) -> Optional[ModelRegistry]:
+    """Fetch a model by name, ignoring stray whitespace."""
+    normalized = normalize_model_name(model_name)
+    if not normalized:
+        return None
+
+    model = session.exec(
+        select(ModelRegistry).where(ModelRegistry.model_name == normalized)
+    ).first()
+
+    if model:
+        return _normalize_model_record(session, model, normalized)
+
+    # Fallback for legacy rows with trailing spaces
+    legacy_model = session.exec(
+        select(ModelRegistry).where(func.trim(ModelRegistry.model_name) == normalized)
+    ).first()
+
+    if legacy_model:
+        return _normalize_model_record(session, legacy_model, normalized)
+
+    return None
+
+
 # --- API Endpoints ---
 
 # ===== Group 1: Model Registry (Database Ops) =====
@@ -398,15 +513,16 @@ def register_model(
     request: ModelCreateRequest, session: Session = Depends(get_db_session)
 ):
     """Register a new model with the API."""
+    model_name = normalize_model_name(request.model_name)
+    hf_path = normalize_hf_path(request.hf_path)
+
     # Check if model already exists
-    existing = session.exec(
-        select(ModelRegistry).where(ModelRegistry.model_name == request.model_name)
-    ).first()
+    existing = get_model_by_name(session, model_name)
 
     if existing:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Model '{request.model_name}' already registered",
+            detail=f"Model '{model_name}' already registered",
         )
 
     # Validate cache location
@@ -445,8 +561,8 @@ def register_model(
 
     # Create new registry entry
     new_model = ModelRegistry(
-        model_name=request.model_name,
-        hf_path=request.hf_path,
+        model_name=model_name,
+        hf_path=hf_path,
         trust_remote_code=request.trust_remote_code,
         cache_location=request.cache_location,
         cache_path=actual_cache_path,
@@ -476,14 +592,13 @@ def update_model_metadata(
     session: Session = Depends(get_db_session),
 ):
     """Update benchmark and operational metrics for a model."""
-    model = session.exec(
-        select(ModelRegistry).where(ModelRegistry.model_name == model_name)
-    ).first()
+    normalized_name = normalize_model_name(model_name)
+    model = get_model_by_name(session, normalized_name)
 
     if not model:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Model '{model_name}' not found",
+            detail=f"Model '{normalized_name}' not found",
         )
 
     # Update only the fields that are provided (not None)
@@ -509,14 +624,13 @@ def update_model_config(
     session: Session = Depends(get_db_session),
 ):
     """Update model-specific configuration (load params, compatibility status)."""
-    model = session.exec(
-        select(ModelRegistry).where(ModelRegistry.model_name == model_name)
-    ).first()
+    normalized_name = normalize_model_name(model_name)
+    model = get_model_by_name(session, normalized_name)
 
     if not model:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Model '{model_name}' not found",
+            detail=f"Model '{normalized_name}' not found",
         )
 
     # Validate load_config is valid JSON if provided
@@ -563,30 +677,29 @@ def delete_model(
         model_name: Name of the model to delete
         delete_files: If True, also delete model files from disk (default: False)
     """
-    model = session.exec(
-        select(ModelRegistry).where(ModelRegistry.model_name == model_name)
-    ).first()
+    normalized_name = normalize_model_name(model_name)
+    model = get_model_by_name(session, normalized_name)
 
     if not model:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Model '{model_name}' not found",
+            detail=f"Model '{normalized_name}' not found",
         )
 
     # Check if this model is currently loaded
-    if model_manager.loaded_model_name == model_name:
+    if model_manager.loaded_model_name and normalize_model_name(model_manager.loaded_model_name) == normalized_name:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Cannot delete '{model_name}' - it is currently loaded. Unload it first.",
+            detail=f"Cannot delete '{normalized_name}' - it is currently loaded. Unload it first.",
         )
 
     # Delete from database
-    hf_path = model.hf_path
+    hf_path = normalize_hf_path(model.hf_path or "")
     cache_path = model.cache_path
     session.delete(model)
     session.commit()
 
-    result = {"message": f"Model '{model_name}' deleted from registry"}
+    result = {"message": f"Model '{normalized_name}' deleted from registry"}
 
     # Optionally delete files from disk
     if delete_files and cache_path:
@@ -636,25 +749,25 @@ def check_for_updates(
     """
     from database import check_model_update_available
 
-    model = session.exec(
-        select(ModelRegistry).where(ModelRegistry.model_name == model_name)
-    ).first()
+    normalized_name = normalize_model_name(model_name)
+    model = get_model_by_name(session, normalized_name)
 
     if not model:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Model '{model_name}' not found",
+            detail=f"Model '{normalized_name}' not found",
         )
 
     if not model.cache_path:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Model '{model_name}' has no cache path - cannot check for updates",
+            detail=f"Model '{normalized_name}' has no cache path - cannot check for updates",
         )
 
     # Check for updates
+    hf_path = normalize_hf_path(model.hf_path or "")
     update_info = check_model_update_available(
-        hf_path=model.hf_path,
+        hf_path=hf_path,
         cache_path=model.cache_path,
         token=os.getenv("HF_TOKEN")
     )
@@ -675,7 +788,7 @@ def check_for_updates(
     session.commit()
 
     return {
-        "model_name": model_name,
+        "model_name": normalized_name,
         "update_available": update_info["update_available"],
         "local_commit": update_info.get("local_commit"),
         "remote_commit": update_info.get("remote_commit"),
@@ -706,39 +819,39 @@ def update_model(
     from database import get_local_model_commit, garbage_collect_model_blobs
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    model = session.exec(
-        select(ModelRegistry).where(ModelRegistry.model_name == model_name)
-    ).first()
+    normalized_name = normalize_model_name(model_name)
+    model = get_model_by_name(session, normalized_name)
 
     if not model:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Model '{model_name}' not found",
+            detail=f"Model '{normalized_name}' not found",
         )
 
     # Check if model is currently loaded
-    if model_manager.loaded_model_name == model_name:
+    if model_manager.loaded_model_name and normalize_model_name(model_manager.loaded_model_name) == normalized_name:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Cannot update '{model_name}' - it is currently loaded. Unload it first.",
+            detail=f"Cannot update '{normalized_name}' - it is currently loaded. Unload it first.",
         )
 
     if not model.cache_path:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Model '{model_name}' has no cache path",
+            detail=f"Model '{normalized_name}' has no cache path",
         )
 
+    hf_path = normalize_hf_path(model.hf_path or "")
     # Get current version before update
-    old_commit = get_local_model_commit(model.hf_path, model.cache_path)
+    old_commit = get_local_model_commit(hf_path, model.cache_path)
 
     try:
         # Download latest version (HuggingFace reuses unchanged blobs automatically)
-        print(f"📥 Downloading latest version of {model.hf_path}...")
+        print(f"📥 Downloading latest version of {hf_path}...")
 
         # Download model and tokenizer
         AutoModelForCausalLM.from_pretrained(
-            model.hf_path,
+            hf_path,
             cache_dir=model.cache_path,
             trust_remote_code=model.trust_remote_code,
             revision="main",  # Always get latest
@@ -747,14 +860,14 @@ def update_model(
         )
 
         AutoTokenizer.from_pretrained(
-            model.hf_path,
+            hf_path,
             cache_dir=model.cache_path,
             trust_remote_code=model.trust_remote_code,
             revision="main"
         )
 
         # Get new version
-        new_commit = get_local_model_commit(model.hf_path, model.cache_path)
+        new_commit = get_local_model_commit(hf_path, model.cache_path)
 
         # Update model record
         model.current_commit = new_commit
@@ -765,7 +878,7 @@ def update_model(
         session.commit()
 
         result = {
-            "message": f"Model '{model_name}' updated successfully",
+            "message": f"Model '{normalized_name}' updated successfully",
             "old_commit": old_commit,
             "new_commit": new_commit,
             "updated_at": datetime.now().isoformat()
@@ -774,7 +887,7 @@ def update_model(
         # Garbage collect old blobs if requested
         if garbage_collect:
             print(f"🧹 Cleaning up orphaned blobs...")
-            gc_result = garbage_collect_model_blobs(model.hf_path, model.cache_path)
+            gc_result = garbage_collect_model_blobs(hf_path, model.cache_path)
 
             if gc_result.get("success"):
                 result["garbage_collection"] = {
@@ -823,33 +936,32 @@ def get_status():
 def load_model(request: ModelLoadRequest, session: Session = Depends(get_db_session)):
     """Load a model into VRAM. This will be a slow request."""
     # Look up the model in the registry
-    model = session.exec(
-        select(ModelRegistry).where(ModelRegistry.model_name == request.model_name)
-    ).first()
+    requested_name = normalize_model_name(request.model_name)
+    model = get_model_by_name(session, requested_name)
 
     if not model:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Model '{request.model_name}' not found in registry. Register it first.",
+            detail=f"Model '{requested_name}' not found in registry. Register it first.",
         )
 
     # Check compatibility status (unless force_load is True)
     if model.compatibility_status == "incompatible" and not request.force_load:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Model '{request.model_name}' is marked as incompatible with this hardware. "
+            detail=f"Model '{requested_name}' is marked as incompatible with this hardware. "
                    f"Notes: {model.compatibility_notes or 'No details available'}. "
                    f"Use force_load=true to retry anyway.",
         )
 
     # Warn about degraded models (but allow loading)
     if model.compatibility_status == "degraded":
-        print(f"⚠️  Loading degraded model '{request.model_name}' - may have intermittent issues. "
+        print(f"⚠️  Loading degraded model '{requested_name}' - may have intermittent issues. "
               f"Notes: {model.compatibility_notes or 'Unknown issue'}")
 
     # Log force load attempt
     if request.force_load and model.compatibility_status == "incompatible":
-        print(f"⚠️  Force loading incompatible model '{request.model_name}' - testing for intermittent issues")
+        print(f"⚠️  Force loading incompatible model '{requested_name}' - testing for intermittent issues")
 
     # IMPORTANT: Update database BEFORE attempting to load to track compatibility testing
     # This ensures that even if the server crashes, we have a record of the attempt
@@ -857,12 +969,13 @@ def load_model(request: ModelLoadRequest, session: Session = Depends(get_db_sess
     model.compatibility_status = "testing"
     session.add(model)
     session.commit()
-    print(f"🔍 Testing compatibility for '{request.model_name}'...")
+    print(f"🔍 Testing compatibility for '{requested_name}'...")
 
     # Load the model with cache location and custom config
+    hf_path = normalize_hf_path(model.hf_path or "")
     try:
         model_manager.load(
-            hf_path=model.hf_path,
+            hf_path=hf_path,
             model_name=model.model_name,
             model_id=model.id,
             trust_remote_code=model.trust_remote_code,
@@ -911,7 +1024,7 @@ def load_model(request: ModelLoadRequest, session: Session = Depends(get_db_sess
             # Capture version information if not already set
             if not model.current_commit and model.cache_path:
                 from database import get_local_model_commit
-                commit = get_local_model_commit(model.hf_path, model.cache_path)
+                commit = get_local_model_commit(hf_path, model.cache_path)
                 if commit:
                     model.current_commit = commit
                     model.current_version = "main"  # Default to main branch
@@ -925,7 +1038,7 @@ def load_model(request: ModelLoadRequest, session: Session = Depends(get_db_sess
         session.commit()
 
         return {
-            "message": f"Model '{request.model_name}' loaded successfully",
+            "message": f"Model '{requested_name}' loaded successfully",
             "model_id": model.id,
             "parameter_count": model.parameter_count,
             "model_type": model.model_type,
@@ -1369,14 +1482,13 @@ def get_performance_stats(
 ):
     """Get aggregated performance statistics for a specific model."""
     # Find the model
-    model = session.exec(
-        select(ModelRegistry).where(ModelRegistry.model_name == model_name)
-    ).first()
+    normalized_name = normalize_model_name(model_name)
+    model = get_model_by_name(session, normalized_name)
 
     if not model:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Model '{model_name}' not found",
+            detail=f"Model '{normalized_name}' not found",
         )
 
     # Get all logs for this model
@@ -1387,7 +1499,7 @@ def get_performance_stats(
     if not logs:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"No performance logs found for model '{model_name}'",
+            detail=f"No performance logs found for model '{normalized_name}'",
         )
 
     # Calculate statistics
@@ -1422,14 +1534,13 @@ def get_performance_logs(
 ):
     """Get recent performance logs for a specific model."""
     # Find the model
-    model = session.exec(
-        select(ModelRegistry).where(ModelRegistry.model_name == model_name)
-    ).first()
+    normalized_name = normalize_model_name(model_name)
+    model = get_model_by_name(session, normalized_name)
 
     if not model:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Model '{model_name}' not found",
+            detail=f"Model '{normalized_name}' not found",
         )
 
     # Get logs
@@ -1441,7 +1552,7 @@ def get_performance_logs(
     )
     logs = session.exec(statement).all()
 
-    return {"model_name": model_name, "logs": logs, "count": len(logs)}
+    return {"model_name": normalized_name, "logs": logs, "count": len(logs)}
 
 
 # ===== Group 6: Cache Management =====

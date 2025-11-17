@@ -391,10 +391,18 @@ function closeRegisterModal() {
 async function registerModel(event) {
     event.preventDefault();
 
+    const modelName = document.getElementById('model-name').value.trim();
+    const hfPathInput = document.getElementById('hf-path').value.trim();
+    if (!modelName || !hfPathInput) {
+        alert('Model name and Hugging Face path are required.');
+        return;
+    }
+
+    const normalizedHfPath = hfPathInput.replace(/\s*\/\s*/g, '/');
     const cacheLocation = document.getElementById('cache-location').value;
     const formData = {
-        model_name: document.getElementById('model-name').value,
-        hf_path: document.getElementById('hf-path').value,
+        model_name: modelName,
+        hf_path: normalizedHfPath,
         trust_remote_code: document.getElementById('trust-remote').checked,
         cache_location: cacheLocation,
         estimated_size_mb: parseInt(document.getElementById('estimated-size').value) || 5000
@@ -402,7 +410,7 @@ async function registerModel(event) {
 
     // Add cache_path if custom location is selected
     if (cacheLocation === 'custom') {
-        const cachePath = document.getElementById('cache-path').value;
+        const cachePath = document.getElementById('cache-path').value.trim();
         if (!cachePath) {
             alert('Please specify a custom cache path');
             return;

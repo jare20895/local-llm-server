@@ -1,0 +1,28 @@
+  === GIT COMMIT TEMPLATE ===
+  <type>(<scope>): <subject>
+
+  [Motivation]:
+  - Why is this change necessary?
+  - Prior behavior / issue.
+
+  [Testing]:
+  - [ ] Manual – steps/results:
+  - [ ] Unit – tests added/updated:
+  - [ ] Integration – scenarios covered:
+
+  [Issues]:
+  - Fixes/Closes/Resolves #<id> (optional)
+
+  [BreakingChange]:
+  - BREAKING CHANGE: <details> (optional)
+
+  [Metadata]:
+  - <Any extra automation/CI metadata> (optional)
+
+  Notes:
+
+  - Header line stays Conventional Commit compliant (type + optional scope + imperative subject).
+  - Each structured body section still begins with the [KEY]: marker for straightforward parsing.
+  - Prompt-style bullet hints ensure the author actually includes the expected detail without bloating the template.
+  - Testing section keeps the checkbox cues but prompts for short descriptions so the AI gets context, not just a “Yes/No”.
+  - Footer clearly separates issues/breaking changes/metadata; authors can delete unused blocks.
