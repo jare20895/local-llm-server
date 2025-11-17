@@ -10,6 +10,7 @@ export default async function Page() {
       initialLogs={data.logs}
       initialStatus={data.status}
       initialModels={data.models}
+      initialLocalCopies={data.localCopies}
     />
   );
 }

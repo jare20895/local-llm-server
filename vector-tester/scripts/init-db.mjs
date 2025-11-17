@@ -31,6 +31,19 @@ CREATE TABLE IF NOT EXISTS log_events (
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   FOREIGN KEY (run_id) REFERENCES test_runs(id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS models_test (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_model_id INTEGER,
+  model_name TEXT NOT NULL UNIQUE,
+  hf_path TEXT,
+  cache_location TEXT,
+  compatibility_status TEXT,
+  metadata TEXT,
+  status TEXT NOT NULL DEFAULT 'staged',
+  notes TEXT,
+  cached_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 `);
 
 console.log(`Initialized tester database at ${dbPath}`);

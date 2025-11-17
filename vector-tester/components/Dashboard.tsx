@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { TestRun, LogEvent } from "@/lib/db";
+import type { TestRun, LogEvent, TestModelCopy } from "@/lib/db";
 import type { LlmStatus, ModelSummary } from "@/lib/llm";
 
 type Props = {
@@ -9,6 +9,7 @@ type Props = {
   initialLogs: LogEvent[];
   initialStatus: LlmStatus | null;
   initialModels: ModelSummary[];
+  initialLocalCopies: TestModelCopy[];
 };
 
 export default function Dashboard({
@@ -16,6 +17,7 @@ export default function Dashboard({
   initialLogs,
   initialStatus,
   initialModels,
+  initialLocalCopies,
 }: Props) {
   const [form, setForm] = useState({
     model_name: "",
@@ -28,6 +30,9 @@ export default function Dashboard({
   const [logs, setLogs] = useState<LogEvent[]>(initialLogs);
   const [status, setStatus] = useState<LlmStatus | null>(initialStatus);
   const [models, setModels] = useState<ModelSummary[]>(initialModels);
+  const [localCopies, setLocalCopies] = useState<TestModelCopy[]>(
+    initialLocalCopies
+  );
   const [statusError, setStatusError] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState(
     initialModels[0]?.model_name ?? ""
@@ -151,18 +156,25 @@ export default function Dashboard({
   const handleOfflineSyncRequest = async () => {
     if (!selectedModel) return;
     try {
-      const res = await fetch("/api/log-events", {
+      const res = await fetch("/api/models/offline", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          source: "vector-tester",
-          message: `Request offline cache download for ${selectedModel}`,
+          model_name: selectedModel,
         }),
       });
       if (!res.ok) {
-        throw new Error("Failed to log request");
+        const error = await res.json();
+        throw new Error(error.error || "Failed to cache model");
       }
-      setOfflineSyncMessage(`Offline sync queued for ${selectedModel}.`);
+      const data = await res.json();
+      setLocalCopies((prev) => {
+        const filtered = prev.filter(
+          (copy) => copy.model_name !== selectedModel
+        );
+        return [data.model, ...filtered];
+      });
+      setOfflineSyncMessage(`Offline copy captured for ${selectedModel}.`);
     } catch (error) {
       setOfflineSyncMessage(
         `Could not log request: ${(error as Error).message}`
@@ -404,6 +416,29 @@ export default function Dashboard({
     );
   };
 
+  const renderLocalCopies = () => (
+    <div style={{ maxHeight: 260, overflowY: "auto" }}>
+      {localCopies.length === 0 && (
+        <p className="muted">No offline copies captured yet.</p>
+      )}
+      {localCopies.map((copy) => (
+        <div
+          key={copy.id}
+          style={{
+            padding: "8px 0",
+            borderBottom: "1px solid rgba(255,255,255,0.05)",
+          }}
+        >
+          <strong>{copy.model_name}</strong>
+          <p className="muted" style={{ margin: 0 }}>
+            Cached {new Date(copy.cached_at).toLocaleString()} · Status:{" "}
+            {copy.status}
+          </p>
+        </div>
+      ))}
+    </div>
+  );
+
   const renderRegistryTab = () => (
     <>
       <section className="card">
@@ -430,13 +465,17 @@ export default function Dashboard({
           </p>
         )}
         <p className="muted" style={{ marginTop: 12 }}>
-          When models are requested for offline use, Vector-Tester records an action in the log so
-          operators can sync the cache even if the main API goes offline.
+          Requesting an offline copy stores the current registry record inside Vector-Tester&apos;s
+          database so testing can proceed even if the primary API goes offline.
         </p>
       </section>
       <section className="card">
         <h2>Registry Snapshot</h2>
         {renderModelsList()}
+      </section>
+      <section className="card">
+        <h2>Cached Offline Models</h2>
+        {renderLocalCopies()}
       </section>
     </>
   );

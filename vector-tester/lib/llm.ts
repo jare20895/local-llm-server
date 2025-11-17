@@ -13,6 +13,10 @@ export type ModelSummary = {
   cache_location: string;
   compatibility_status: string | null;
   total_inferences: number;
+  hf_path?: string | null;
+  compatibility_notes?: string | null;
+  cache_path?: string | null;
+  [key: string]: unknown;
 };
 
 const DEFAULT_BASE = "http://llm-server:8000";

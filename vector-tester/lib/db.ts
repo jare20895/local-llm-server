@@ -33,6 +33,19 @@ CREATE TABLE IF NOT EXISTS log_events (
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   FOREIGN KEY (run_id) REFERENCES test_runs(id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS models_test (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_model_id INTEGER,
+  model_name TEXT NOT NULL UNIQUE,
+  hf_path TEXT,
+  cache_location TEXT,
+  compatibility_status TEXT,
+  metadata TEXT,
+  status TEXT NOT NULL DEFAULT 'staged',
+  notes TEXT,
+  cached_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 `);
 
 export type TestRun = {
@@ -53,6 +66,19 @@ export type LogEvent = {
   level: string;
   message: string;
   created_at: string;
+};
+
+export type TestModelCopy = {
+  id: number;
+  source_model_id: number | null;
+  model_name: string;
+  hf_path: string | null;
+  cache_location: string | null;
+  compatibility_status: string | null;
+  metadata: string | null;
+  status: string;
+  notes: string | null;
+  cached_at: string;
 };
 
 export function getRecentRuns(limit = 15): TestRun[] {
@@ -139,6 +165,80 @@ export function getRecentLogs(limit = 50): LogEvent[] {
     `SELECT * FROM log_events ORDER BY datetime(created_at) DESC LIMIT ?`
   );
   return stmt.all(limit) as LogEvent[];
+}
+
+export function insertOrUpdateTestModel(data: {
+  source_model_id?: number | null;
+  model_name: string;
+  hf_path?: string | null;
+  cache_location?: string | null;
+  compatibility_status?: string | null;
+  metadata?: string | null;
+  status?: string;
+  notes?: string | null;
+}): TestModelCopy {
+  const existing = getTestModelByName(data.model_name);
+  if (existing) {
+    const stmt = db.prepare(
+      `UPDATE models_test
+       SET source_model_id = COALESCE(@source_model_id, source_model_id),
+           hf_path = COALESCE(@hf_path, hf_path),
+           cache_location = COALESCE(@cache_location, cache_location),
+           compatibility_status = COALESCE(@compatibility_status, compatibility_status),
+           metadata = COALESCE(@metadata, metadata),
+           status = COALESCE(@status, status),
+           notes = COALESCE(@notes, notes),
+           cached_at = datetime('now')
+       WHERE model_name = @model_name`
+    );
+    stmt.run({
+      ...data,
+      source_model_id: data.source_model_id ?? null,
+      hf_path: data.hf_path ?? null,
+      cache_location: data.cache_location ?? null,
+      compatibility_status: data.compatibility_status ?? null,
+      metadata: data.metadata ?? null,
+      status: data.status ?? null,
+      notes: data.notes ?? null,
+    });
+    return getTestModelByName(data.model_name)!;
+  }
+
+  const stmt = db.prepare(
+    `INSERT INTO models_test
+      (source_model_id, model_name, hf_path, cache_location, compatibility_status, metadata, status, notes)
+     VALUES
+      (@source_model_id, @model_name, @hf_path, @cache_location, @compatibility_status, @metadata, COALESCE(@status, 'staged'), @notes)`
+  );
+  const info = stmt.run({
+    source_model_id: data.source_model_id ?? null,
+    model_name: data.model_name,
+    hf_path: data.hf_path ?? null,
+    cache_location: data.cache_location ?? null,
+    compatibility_status: data.compatibility_status ?? null,
+    metadata: data.metadata ?? null,
+    status: data.status ?? "staged",
+    notes: data.notes ?? null,
+  });
+  return getTestModelById(Number(info.lastInsertRowid));
+}
+
+export function getTestModels(): TestModelCopy[] {
+  const stmt = db.prepare(
+    `SELECT * FROM models_test ORDER BY datetime(cached_at) DESC`
+  );
+  return stmt.all() as TestModelCopy[];
+}
+
+export function getTestModelById(id: number): TestModelCopy {
+  const stmt = db.prepare(`SELECT * FROM models_test WHERE id = ?`);
+  return stmt.get(id) as TestModelCopy;
+}
+
+export function getTestModelByName(model_name: string): TestModelCopy | null {
+  const stmt = db.prepare(`SELECT * FROM models_test WHERE model_name = ?`);
+  const result = stmt.get(model_name);
+  return (result as TestModelCopy) || null;
 }
 
 export { db };
