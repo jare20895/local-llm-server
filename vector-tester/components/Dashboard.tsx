@@ -474,7 +474,7 @@ export default function Dashboard({
         {renderModelsList()}
       </section>
       <section className="card">
-        <h2>Cached Offline Models</h2>
+        <h2>Models Staged for Testing</h2>
         {renderLocalCopies()}
       </section>
     </>
@@ -486,14 +486,22 @@ export default function Dashboard({
       <form onSubmit={handleSubmit}>
         <div className="form-group">
           <label>Model Name</label>
-          <input
+          <select
             value={form.model_name}
             onChange={(e) =>
               setForm((prev) => ({ ...prev, model_name: e.target.value }))
             }
             required
-            placeholder="e.g., Qwen2.5-3B-Instruct"
-          />
+          >
+            <option value="" disabled>
+              Select a staged model
+            </option>
+            {localCopies.map((copy) => (
+              <option key={copy.id} value={copy.model_name}>
+                {copy.model_name}
+              </option>
+            ))}
+          </select>
         </div>
         <div className="form-group">
           <label>Scenario / Notes</label>
