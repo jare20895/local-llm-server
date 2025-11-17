@@ -64,6 +64,7 @@ $RECYCLE.BIN/
 #LLM Model folders & database files
 hf-cache/
 data/
+vector-tester/data/
 
 
 # -------------------------------------------------------------------

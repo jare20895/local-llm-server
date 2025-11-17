@@ -97,6 +97,48 @@ Navigate to `http://localhost:8000` to access the web interface.
 - Swagger UI: `http://localhost:8000/docs`
 - ReDoc: `http://localhost:8000/redoc`
 
+## Vector-Tester Frontend (llm-frontend)
+
+An optional companion UI called **Vector-Tester** now ships with the repo. It runs in its own container (`llm-frontend`) and focuses on capturing orchestrated load tests, log events, and crash telemetry without depending on the primary API staying online.
+
+### Capabilities
+
+- Dedicated SQLite database for test runs and log events (`vector-tester/data/vector-tester.db`).
+- Modern Next.js UI that mirrors the styling of the primary dashboard.
+- REST endpoints to:
+  - `POST /api/test-runs` – register/load attempts initiated from anywhere (UI, scripts, or log scrapers).
+  - `PATCH /api/test-runs` – update a run with success/failure + duration.
+  - `POST /api/log-events` – push docker-compose, GPU, or FastAPI log lines into the tester DB even if the main API crashed.
+  - `GET /api/test-runs`, `GET /api/log-events` – power the timeline/log panels in the UI.
+- Periodic polling of the main FastAPI service (`LLM_API_BASE`) for `/api/status` and `/api/models` so you can correlate tester notes with actual registry data.
+
+### Local Development
+
+```bash
+cd vector-tester
+cp .env.example .env.local   # adjust LLM_API_BASE if needed
+npm install
+npm run db:migrate           # creates vector-tester/data/vector-tester.db
+npm run dev                  # http://localhost:3000
+```
+
+The tester exposes the same Next.js app APIs locally, so you can `curl http://localhost:3000/api/log-events` to ingest logs from external scripts.
+
+### Docker
+
+`docker-compose.yml` now includes `llm-frontend`. Bring up both services with:
+
+```bash
+docker-compose up -d
+```
+
+The tester will be available at `http://localhost:4173` and uses the shared Docker network (`LLM_API_BASE=http://llm-server:8000`) to talk to the primary API. Crash telemetry from docker-compose logs can be posted to `http://llm-frontend:3000/api/log-events`, ensuring failures are captured even if `llm-server` exits unexpectedly. The tester database lives at `vector-tester/data` on the host so you can inspect it independently.
+
+### Tester API Documentation
+
+- OpenAPI JSON: `http://localhost:4173/api/docs`
+- Swagger UI: `http://localhost:4173/swagger`
+
 ### API Endpoints
 
 **Model Registry:**

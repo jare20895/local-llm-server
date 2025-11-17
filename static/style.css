@@ -334,18 +334,6 @@ body {
     overflow-y: auto;
 }
 
-.generated-text.streaming::after {
-    content: '▊';
-    animation: blink 1s infinite;
-    color: var(--primary-color);
-    margin-left: 2px;
-}
-
-@keyframes blink {
-    0%, 50% { opacity: 1; }
-    51%, 100% { opacity: 0; }
-}
-
 .stats {
     font-size: 13px;
     color: var(--text-secondary);

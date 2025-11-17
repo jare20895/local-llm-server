@@ -1369,6 +1369,9 @@ async def generate_text_stream(
 
             # Stream tokens
             token_count = 0
+            log_every = 15
+            chunk_every = 15
+            token_buffer: list[str] = []
             import sys
             for token_text in streamer:
                 if ttft is None:
@@ -1376,9 +1379,15 @@ async def generate_text_stream(
                     print(f"TTFT: {ttft}ms", flush=True)  # Debug
 
                 token_count += 1
-                chunk = f"data: {json.dumps({'type': 'token', 'text': token_text})}\n\n"
-                print(f"Yielding token {token_count}: {repr(token_text)}", flush=True)  # Debug
-                yield chunk
+                token_buffer.append(token_text)
+
+                if token_count % log_every == 0 or token_count == 1:
+                    print(f"Yielding token {token_count}: {repr(token_text)}", flush=True)  # Debug
+
+                if len(token_buffer) >= chunk_every:
+                    chunk_payload = {"type": "token", "text": "".join(token_buffer)}
+                    yield f"data: {json.dumps(chunk_payload)}\n\n"
+                    token_buffer = []
 
                 # Ensure immediate flush by yielding empty string
                 # This forces the response to be sent immediately
@@ -1386,7 +1395,13 @@ async def generate_text_stream(
 
             generation_thread.join()
             output_length = token_count
-            print(f"Total tokens generated: {output_length}", flush=True)  # Debug
+            if token_buffer:
+                chunk_payload = {"type": "token", "text": "".join(token_buffer)}
+                yield f"data: {json.dumps(chunk_payload)}\n\n"
+            end_time = time.perf_counter()
+            total_time_ms = (end_time - start_time) * 1000
+            tps = (output_length / (total_time_ms / 1000)) if total_time_ms > 0 else 0
+            print(f"Total tokens generated: {output_length} | Avg speed: {tps:.2f} tok/s", flush=True)
 
         except Exception as e:
             error_occurred = True

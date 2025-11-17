@@ -521,91 +521,128 @@ async function generateTextStreaming(event) {
     document.getElementById('generation-result').style.display = 'block';
     const textDiv = document.getElementById('generated-text');
     textDiv.textContent = '';
-    textDiv.classList.add('streaming');
+    // Removed special streaming styling to keep UI simple
 
     let fullText = '';
     let stats = null;
 
-    try {
-        const response = await fetch(`${API_BASE}/api/generate/stream`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(formData)
-        });
+    return new Promise((resolve) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', `${API_BASE}/api/generate/stream`, true);
+        xhr.responseType = 'text';
+        xhr.setRequestHeader('Content-Type', 'application/json');
+        xhr.setRequestHeader('Accept', 'text/event-stream');
 
-        if (!response.ok) {
-            const error = await response.json();
-            alert(`Generation failed: ${error.detail}`);
-            return;
-        }
-
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
         let buffer = '';
+        let lastIndex = 0;
+        let completed = false;
 
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
+        const appendToken = (text) => {
+            textDiv.insertAdjacentText('beforeend', text);
+            textDiv.scrollTop = textDiv.scrollHeight;
+        };
 
-            // Decode the chunk and add to buffer
-            buffer += decoder.decode(value, { stream: true });
+        const processBuffer = () => {
+            if (!buffer) return;
+            buffer = buffer.replace(/\r/g, '');
 
-            // Process complete lines
-            const lines = buffer.split('\n');
+            let boundary = buffer.indexOf('\n\n');
+            while (boundary !== -1) {
+                const eventChunk = buffer.slice(0, boundary).trim();
+                buffer = buffer.slice(boundary + 2);
+                boundary = buffer.indexOf('\n\n');
 
-            // Keep the last incomplete line in the buffer
-            buffer = lines.pop() || '';
+                if (!eventChunk) continue;
 
-            for (const line of lines) {
-                if (line.startsWith('data: ')) {
-                    try {
-                        const data = JSON.parse(line.slice(6));
+                const dataLines = eventChunk
+                    .split('\n')
+                    .filter((line) => line.startsWith('data:'));
 
-                        if (data.type === 'start') {
-                            // Initial metadata received
-                            console.log('Stream started, input tokens:', data.input_tokens);
-                        } else if (data.type === 'token') {
-                            // New token received - update immediately
-                            fullText += data.text;
-                            textDiv.textContent = fullText;
-                            // Force immediate render
-                            textDiv.scrollTop = textDiv.scrollHeight;
-                            // Force browser to render immediately
-                            await new Promise(resolve => setTimeout(resolve, 0));
-                        } else if (data.type === 'done') {
-                            // Generation complete
-                            stats = data;
-                        } else if (data.type === 'error') {
-                            alert(`Generation error: ${data.error}`);
-                            return;
-                        }
-                    } catch (e) {
-                        console.error('Failed to parse SSE data:', line, e);
+                if (!dataLines.length) continue;
+
+                const payloadText = dataLines
+                    .map((line) => line.replace(/^data:\s*/, ''))
+                    .join('');
+
+                try {
+                    const data = JSON.parse(payloadText);
+                    if (data.type === 'start') {
+                        console.debug('Stream started', data);
+                    } else if (data.type === 'token') {
+                        fullText += data.text;
+                        appendToken(data.text);
+                    } else if (data.type === 'done') {
+                        stats = data;
+                    } else if (data.type === 'error') {
+                        throw new Error(data.error || 'Unknown streaming error');
                     }
+                } catch (err) {
+                    console.error('Failed to parse SSE payload:', payloadText, err);
                 }
             }
-        }
+        };
 
-        // Display final stats
-        if (stats) {
-            const statsHtml = `
-                <strong>Input Tokens:</strong> ${stats.input_tokens} |
-                <strong>Output Tokens:</strong> ${stats.output_tokens} |
-                <strong>Total Tokens:</strong> ${stats.total_tokens} |
-                <strong>Time:</strong> ${stats.inference_time_ms.toFixed(0)}ms |
-                <strong>TTFT:</strong> ${stats.ttft_ms.toFixed(0)}ms |
-                <strong>Speed:</strong> ${stats.tokens_per_second.toFixed(2)} tok/s
-            `;
-            document.getElementById('generation-stats').innerHTML = statsHtml;
-        }
+        const handleChunk = () => {
+            const chunk = xhr.responseText.slice(lastIndex);
+            if (!chunk) {
+                return;
+            }
+            lastIndex = xhr.responseText.length;
+            buffer += chunk;
+            processBuffer();
+        };
 
-    } catch (error) {
-        alert(`Error during streaming: ${error.message}`);
-    } finally {
-        submitBtn.textContent = 'Generate';
-        submitBtn.disabled = false;
-        textDiv.classList.remove('streaming');
-    }
+        xhr.onprogress = handleChunk;
+        xhr.onload = () => {
+            handleChunk();
+        };
+
+        xhr.onreadystatechange = () => {
+            if (xhr.readyState === XMLHttpRequest.HEADERS_RECEIVED && xhr.status >= 400) {
+                alert(`Generation failed: ${xhr.status} ${xhr.statusText}`);
+                xhr.abort();
+                return;
+            }
+
+            if (xhr.readyState === XMLHttpRequest.DONE) {
+                handleChunk();
+                completed = true;
+                submitBtn.textContent = 'Generate';
+                submitBtn.disabled = false;
+
+                if (xhr.status !== 200) {
+                    alert(`Generation failed: ${xhr.status} ${xhr.statusText}`);
+                    resolve();
+                    return;
+                }
+
+                if (stats) {
+                    const statsHtml = `
+                        <strong>Input Tokens:</strong> ${stats.input_tokens} |
+                        <strong>Output Tokens:</strong> ${stats.output_tokens} |
+                        <strong>Total Tokens:</strong> ${stats.total_tokens} |
+                        <strong>Time:</strong> ${stats.inference_time_ms.toFixed(0)}ms |
+                        <strong>TTFT:</strong> ${stats.ttft_ms?.toFixed(0) || 'N/A'}ms |
+                        <strong>Speed:</strong> ${stats.tokens_per_second?.toFixed(2) || '0.00'} tok/s
+                    `;
+                    document.getElementById('generation-stats').innerHTML = statsHtml;
+                }
+
+                resolve();
+            }
+        };
+
+        xhr.onerror = () => {
+            if (!completed) {
+                alert('Streaming request failed. Please try again.');
+            }
+            submitBtn.textContent = 'Generate';
+            submitBtn.disabled = false;
+            resolve();
+        };
+
+        xhr.send(JSON.stringify(formData));
+    });
 }
 
 // Settings
