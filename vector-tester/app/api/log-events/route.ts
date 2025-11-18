@@ -4,6 +4,8 @@ import { getRecentLogs, insertLogEvent } from "@/lib/db";
 
 const schema = z.object({
   run_id: z.number().int().positive().optional(),
+  model_id: z.number().int().positive(),
+  test_profile_id: z.number().int().positive().optional(),
   source: z.string().min(2),
   level: z.enum(["debug", "info", "warn", "error"]).optional(),
   message: z.string().min(1),

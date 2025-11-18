@@ -1,3 +1,22 @@
-## Project Context
+## Automated Context Map (AI-readable)
+- **Commit Template**: Always format commits via `.gitmessage`.
 
-- **Commit Template**: Follow `.gitmessage` for structured commits (type(scope): subject + [Motivation]/[Description]/[Testing]/[Issues]/[BreakingChange]/[Metadata]).
+### Core Services
+- `main.py`, `qwen3_api_server.py`, `database.py` → FastAPI LLM API + SQLModel DB (`ModelRegistry`, `PerformanceLog`). Static UI/CSS in `static/`.
+- `vector-tester/` → Next.js “Vector-Tester” frontend + local SQLite (`data/vector-tester.db`). APIs live under `app/api/*` and data helpers in `lib/db.ts`.
+- Legacy “Vector Console” assets share the FastAPI static bundle; reuse styles for new frontends.
+
+### Deployment & Tooling
+- Docker orchestrated via `docker-compose.yml` (services: `llm-server`, `llm-frontend`). Build helper scripts: `start.sh`, `run-local-dev.sh`, `rebuild_docker.sh`.
+- GPU utilities: `diagnose_gpu.sh`, `verify_gpu.py`, ROCm setup in `setup_rocm.sh`.
+
+### Key Workflows
+- **API surface**: `/api/status`, `/api/models`, `/api/orchestrate/*`, `/api/generate`, `/api/generate/stream`, `/api/analytics/*`. Swagger at `/docs`; ReDoc at `/redoc`.
+- **Vector-Tester**: Tabs (Dashboard, Model Registry, Test Runner, Results & Analytics, Test Config, Test Automation, Settings). Test Runner sequence hits `/api/llm/*` proxy routes to health-check, unload/load, validate, and run inference while storing runs/logs.
+- **Offline models**: `/api/models/offline` clones API model metadata into `models_test` for staging; Test Runner dropdowns use these copies.
+- **Test Config data model**: tables for `server_environments`, `test_profiles`, `test_steps`, `swagger_endpoints` with CRUD modals; automation will bind steps to profiles + scripts.
+
+### Documentation Index
+- `README.md` → global overview + usage.
+- `docs/QUICKSTART.md`, `docs/ROCM_SETUP_GUIDE.md`, `docs/DOCKER.md` → setup references.
+- additional diagnostics/how-to under `docs/`.

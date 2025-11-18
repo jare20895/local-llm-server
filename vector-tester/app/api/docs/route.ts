@@ -151,9 +151,11 @@ const spec = {
             "application/json": {
               schema: {
                 type: "object",
-                required: ["source", "message"],
+                required: ["model_id", "source", "message"],
                 properties: {
                   run_id: { type: "integer" },
+                  model_id: { type: "integer" },
+                  test_profile_id: { type: "integer", nullable: true },
                   source: { type: "string" },
                   level: {
                     type: "string",
@@ -202,6 +204,8 @@ const spec = {
         properties: {
           id: { type: "integer" },
           run_id: { type: "integer", nullable: true },
+          model_id: { type: "integer" },
+          test_profile_id: { type: "integer", nullable: true },
           source: { type: "string" },
           level: { type: "string" },
           message: { type: "string" },

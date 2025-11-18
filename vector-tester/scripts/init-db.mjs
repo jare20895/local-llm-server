@@ -22,16 +22,6 @@ CREATE TABLE IF NOT EXISTS test_runs (
   notes TEXT
 );
 
-CREATE TABLE IF NOT EXISTS log_events (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  run_id INTEGER,
-  source TEXT NOT NULL,
-  level TEXT NOT NULL DEFAULT 'info',
-  message TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  FOREIGN KEY (run_id) REFERENCES test_runs(id) ON DELETE CASCADE
-);
-
 CREATE TABLE IF NOT EXISTS models_test (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   source_model_id INTEGER,
@@ -43,6 +33,80 @@ CREATE TABLE IF NOT EXISTS models_test (
   status TEXT NOT NULL DEFAULT 'staged',
   notes TEXT,
   cached_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS server_environments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  hostname TEXT,
+  ip_address TEXT,
+  gpu_model TEXT,
+  gpu_vram_gb REAL,
+  cpu_model TEXT,
+  os_version TEXT,
+  wsl_version TEXT,
+  rocm_version TEXT,
+  notes TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS test_profiles (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  description TEXT,
+  model_test_id INTEGER,
+  server_environment_id INTEGER,
+  default_prompt TEXT,
+  max_tokens INTEGER,
+  temperature REAL,
+  top_p REAL,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT,
+  FOREIGN KEY (model_test_id) REFERENCES models_test(id) ON DELETE SET NULL,
+  FOREIGN KEY (server_environment_id) REFERENCES server_environments(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS test_steps (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  profile_id INTEGER NOT NULL,
+  step_order INTEGER NOT NULL,
+  step_name TEXT NOT NULL,
+  api_method TEXT NOT NULL,
+  api_path TEXT NOT NULL,
+  request_body TEXT,
+  expected_status INTEGER,
+  expected_contains TEXT,
+  pass_rule TEXT,
+  notes TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (profile_id) REFERENCES test_profiles(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS log_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id INTEGER,
+  model_id INTEGER,
+  test_profile_id INTEGER,
+  source TEXT NOT NULL,
+  level TEXT NOT NULL DEFAULT 'info',
+  message TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (run_id) REFERENCES test_runs(id) ON DELETE CASCADE,
+  FOREIGN KEY (model_id) REFERENCES models_test(id) ON DELETE SET NULL,
+  FOREIGN KEY (test_profile_id) REFERENCES test_profiles(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS swagger_endpoints (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  method TEXT NOT NULL,
+  path TEXT NOT NULL,
+  summary TEXT,
+  description TEXT,
+  request_schema TEXT,
+  response_schema TEXT,
+  last_synced TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(method, path)
 );
 `);
 

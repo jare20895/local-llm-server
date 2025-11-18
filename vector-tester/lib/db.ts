@@ -24,16 +24,6 @@ CREATE TABLE IF NOT EXISTS test_runs (
   notes TEXT
 );
 
-CREATE TABLE IF NOT EXISTS log_events (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  run_id INTEGER,
-  source TEXT NOT NULL,
-  level TEXT NOT NULL DEFAULT 'info',
-  message TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  FOREIGN KEY (run_id) REFERENCES test_runs(id) ON DELETE CASCADE
-);
-
 CREATE TABLE IF NOT EXISTS models_test (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   source_model_id INTEGER,
@@ -95,6 +85,20 @@ CREATE TABLE IF NOT EXISTS test_steps (
   FOREIGN KEY (profile_id) REFERENCES test_profiles(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS log_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id INTEGER,
+  model_id INTEGER,
+  test_profile_id INTEGER,
+  source TEXT NOT NULL,
+  level TEXT NOT NULL DEFAULT 'info',
+  message TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (run_id) REFERENCES test_runs(id) ON DELETE CASCADE,
+  FOREIGN KEY (model_id) REFERENCES models_test(id) ON DELETE SET NULL,
+  FOREIGN KEY (test_profile_id) REFERENCES test_profiles(id) ON DELETE SET NULL
+);
+
 CREATE TABLE IF NOT EXISTS swagger_endpoints (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   method TEXT NOT NULL,
@@ -107,6 +111,27 @@ CREATE TABLE IF NOT EXISTS swagger_endpoints (
   UNIQUE(method, path)
 );
 `);
+
+type TableColumnInfo = { name: string };
+function ensureColumn(table: string, column: string, definition: string) {
+  const columns = db
+    .prepare(`PRAGMA table_info(${table})`)
+    .all() as TableColumnInfo[];
+  if (!columns.some((col) => col.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
+
+ensureColumn(
+  "log_events",
+  "model_id",
+  "INTEGER REFERENCES models_test(id)"
+);
+ensureColumn(
+  "log_events",
+  "test_profile_id",
+  "INTEGER REFERENCES test_profiles(id)"
+);
 
 export type TestRun = {
   id: number;
@@ -122,6 +147,8 @@ export type TestRun = {
 export type LogEvent = {
   id: number;
   run_id: number | null;
+  model_id: number | null;
+  test_profile_id: number | null;
   source: string;
   level: string;
   message: string;
@@ -254,16 +281,20 @@ export function getRunById(id: number): TestRun {
 
 export function insertLogEvent(data: {
   run_id?: number;
+  model_id: number;
+  test_profile_id?: number;
   source: string;
   level?: string;
   message: string;
 }): LogEvent {
   const stmt = db.prepare(
-    `INSERT INTO log_events (run_id, source, level, message)
-     VALUES (@run_id, @source, COALESCE(@level, 'info'), @message)`
+    `INSERT INTO log_events (run_id, model_id, test_profile_id, source, level, message)
+     VALUES (@run_id, @model_id, @test_profile_id, @source, COALESCE(@level, 'info'), @message)`
   );
   const info = stmt.run({
     run_id: data.run_id ?? null,
+    model_id: data.model_id,
+    test_profile_id: data.test_profile_id ?? null,
     source: data.source,
     level: data.level ?? "info",
     message: data.message,

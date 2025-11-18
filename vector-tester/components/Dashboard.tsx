@@ -172,6 +172,12 @@ export default function Dashboard({
     request_schema: "",
     response_schema: "",
   });
+  const activeTestModel = useMemo(
+    () =>
+      localCopies.find((copy) => copy.model_name === form.model_name) ?? null,
+    [localCopies, form.model_name]
+  );
+  const activeTestModelId = activeTestModel?.id ?? null;
 
   const summarizeStatus = useMemo(() => {
     if (!status) {
@@ -212,22 +218,45 @@ export default function Dashboard({
   }, []);
 
   const logTesterEvent = useCallback(
-    async (message: string, level: "debug" | "info" | "warn" | "error" = "info") => {
+    async (
+      message: string,
+      level: "debug" | "info" | "warn" | "error" = "info",
+      options?: { runId?: number; testProfileId?: number }
+    ) => {
+      if (!activeTestModelId) {
+        console.warn("No staged model selected for tester log:", message);
+        return;
+      }
       try {
+        const payload: {
+          run_id?: number;
+          model_id: number;
+          test_profile_id?: number;
+          source: string;
+          level: "debug" | "info" | "warn" | "error";
+          message: string;
+        } = {
+          model_id: activeTestModelId,
+          source: "vector-tester-runner",
+          level,
+          message,
+        };
+        if (options?.runId) {
+          payload.run_id = options.runId;
+        }
+        if (options?.testProfileId) {
+          payload.test_profile_id = options.testProfileId;
+        }
         await fetch("/api/log-events", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            source: "vector-tester-runner",
-            level,
-            message,
-          }),
+          body: JSON.stringify(payload),
         });
       } catch (error) {
         console.warn("Failed to log tester event", error);
       }
     },
-    []
+    [activeTestModelId]
   );
 
   const responseMessage = (payload: unknown) => {
