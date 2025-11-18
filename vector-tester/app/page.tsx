@@ -11,6 +11,9 @@ export default async function Page() {
       initialStatus={data.status}
       initialModels={data.models}
       initialLocalCopies={data.localCopies}
+      initialServerEnvs={data.serverEnvs}
+      initialProfiles={data.profiles}
+      initialSwagger={data.swagger}
     />
   );
 }

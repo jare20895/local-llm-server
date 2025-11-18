@@ -1,13 +1,33 @@
-import { getRecentLogs, getRecentRuns, getTestModels } from "@/lib/db";
+import {
+  getRecentLogs,
+  getRecentRuns,
+  getTestModels,
+  getServerEnvironments,
+  getTestProfiles,
+  getStepsForProfile,
+  getSwaggerEndpoints,
+} from "@/lib/db";
 import { fetchModels, fetchStatus } from "@/lib/llm";
 
 export async function getDashboardData() {
-  const [runs, logs, status, models, localCopies] = await Promise.all([
+  const [
+    runs,
+    logs,
+    status,
+    models,
+    localCopies,
+    serverEnvs,
+    profiles,
+    swagger,
+  ] = await Promise.all([
     getRecentRuns(),
     getRecentLogs(),
     fetchStatus(),
     fetchModels(),
     getTestModels(),
+    getServerEnvironments(),
+    getTestProfiles(),
+    getSwaggerEndpoints(),
   ]);
 
   return {
@@ -16,5 +36,8 @@ export async function getDashboardData() {
     status,
     models,
     localCopies,
+    serverEnvs,
+    profiles,
+    swagger,
   };
 }

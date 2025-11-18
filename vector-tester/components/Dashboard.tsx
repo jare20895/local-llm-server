@@ -1,7 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { TestRun, LogEvent, TestModelCopy } from "@/lib/db";
+import type {
+  TestRun,
+  LogEvent,
+  TestModelCopy,
+  ServerEnvironment,
+  TestProfile,
+  SwaggerEndpoint,
+} from "@/lib/db";
 import type { LlmStatus, ModelSummary } from "@/lib/llm";
 
 type SidebarItem = { label: string; anchor?: string };
@@ -12,6 +19,9 @@ type Props = {
   initialStatus: LlmStatus | null;
   initialModels: ModelSummary[];
   initialLocalCopies: TestModelCopy[];
+  initialServerEnvs: ServerEnvironment[];
+  initialProfiles: TestProfile[];
+  initialSwagger: SwaggerEndpoint[];
 };
 
 export default function Dashboard({
@@ -20,6 +30,9 @@ export default function Dashboard({
   initialStatus,
   initialModels,
   initialLocalCopies,
+  initialServerEnvs,
+  initialProfiles,
+  initialSwagger,
 }: Props) {
   const [form, setForm] = useState({
     model_name: "",
@@ -35,6 +48,10 @@ export default function Dashboard({
   const [localCopies, setLocalCopies] = useState<TestModelCopy[]>(
     initialLocalCopies
   );
+  const [serverEnvs, setServerEnvs] =
+    useState<ServerEnvironment[]>(initialServerEnvs);
+  const [profiles, setProfiles] = useState<TestProfile[]>(initialProfiles);
+  const [swagger, setSwagger] = useState<SwaggerEndpoint[]>(initialSwagger);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState(
     initialModels[0]?.model_name ?? ""
@@ -56,6 +73,48 @@ export default function Dashboard({
     "Hello model, please confirm you can respond to this diagnostic request."
   );
   const [altConfigNotes, setAltConfigNotes] = useState("");
+  const [envForm, setEnvForm] = useState({
+    name: "",
+    hostname: "",
+    ip_address: "",
+    gpu_model: "",
+    gpu_vram_gb: "",
+    cpu_model: "",
+    os_version: "",
+    wsl_version: "",
+    rocm_version: "",
+    notes: "",
+  });
+  const [profileForm, setProfileForm] = useState({
+    name: "",
+    description: "",
+    model_test_id: "",
+    server_environment_id: "",
+    default_prompt: "",
+    max_tokens: "",
+    temperature: "",
+    top_p: "",
+  });
+  const [stepForm, setStepForm] = useState({
+    profile_id: "",
+    step_order: "0",
+    step_name: "",
+    api_method: "POST",
+    api_path: "",
+    request_body: "",
+    expected_status: "200",
+    expected_contains: "",
+    pass_rule: "",
+    notes: "",
+  });
+  const [swaggerForm, setSwaggerForm] = useState({
+    method: "POST",
+    path: "",
+    summary: "",
+    description: "",
+    request_schema: "",
+    response_schema: "",
+  });
 
   const summarizeStatus = useMemo(() => {
     if (!status) {
@@ -412,10 +471,180 @@ export default function Dashboard({
     }
   };
 
+  const handleEnvSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    try {
+      const payload = {
+        ...envForm,
+        gpu_vram_gb: envForm.gpu_vram_gb
+          ? Number(envForm.gpu_vram_gb)
+          : undefined,
+      };
+      const res = await fetch("/api/test-config/server-environments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setServerEnvs((prev) => {
+          const filtered = prev.filter((e) => e.name !== data.environment.name);
+          return [data.environment, ...filtered];
+        });
+        setEnvForm({
+          name: "",
+          hostname: "",
+          ip_address: "",
+          gpu_model: "",
+          gpu_vram_gb: "",
+          cpu_model: "",
+          os_version: "",
+          wsl_version: "",
+          rocm_version: "",
+          notes: "",
+        });
+      } else {
+        alert(`Failed to save environment: ${responseMessage(data)}`);
+      }
+    } catch (error) {
+      alert(`Environment error: ${(error as Error).message}`);
+    }
+  };
+
+  const handleProfileSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    try {
+      const payload = {
+        name: profileForm.name,
+        description: profileForm.description || undefined,
+        model_test_id: profileForm.model_test_id
+          ? Number(profileForm.model_test_id)
+          : undefined,
+        server_environment_id: profileForm.server_environment_id
+          ? Number(profileForm.server_environment_id)
+          : undefined,
+        default_prompt: profileForm.default_prompt || undefined,
+        max_tokens: profileForm.max_tokens
+          ? Number(profileForm.max_tokens)
+          : undefined,
+        temperature: profileForm.temperature
+          ? Number(profileForm.temperature)
+          : undefined,
+        top_p: profileForm.top_p ? Number(profileForm.top_p) : undefined,
+      };
+      const res = await fetch("/api/test-config/test-profiles", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setProfiles((prev) => [data.profile, ...prev]);
+        setProfileForm({
+          name: "",
+          description: "",
+          model_test_id: "",
+          server_environment_id: "",
+          default_prompt: "",
+          max_tokens: "",
+          temperature: "",
+          top_p: "",
+        });
+      } else {
+        alert(`Failed to save profile: ${responseMessage(data)}`);
+      }
+    } catch (error) {
+      alert(`Profile error: ${(error as Error).message}`);
+    }
+  };
+
+  const handleStepSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!stepForm.profile_id) {
+      alert("Select a profile first.");
+      return;
+    }
+    try {
+      const payload = {
+        profile_id: Number(stepForm.profile_id),
+        step_order: Number(stepForm.step_order),
+        step_name: stepForm.step_name,
+        api_method: stepForm.api_method,
+        api_path: stepForm.api_path,
+        request_body: stepForm.request_body || undefined,
+        expected_status: stepForm.expected_status
+          ? Number(stepForm.expected_status)
+          : undefined,
+        expected_contains: stepForm.expected_contains || undefined,
+        pass_rule: stepForm.pass_rule || undefined,
+        notes: stepForm.notes || undefined,
+      };
+      const res = await fetch("/api/test-config/test-steps", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setStepForm((prev) => ({
+          ...prev,
+          step_name: "",
+          request_body: "",
+          expected_contains: "",
+          pass_rule: "",
+          notes: "",
+          step_order: String(Number(prev.step_order) + 1),
+        }));
+      } else {
+        alert(`Failed to save step: ${responseMessage(data)}`);
+      }
+    } catch (error) {
+      alert(`Step error: ${(error as Error).message}`);
+    }
+  };
+
+  const handleSwaggerSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    try {
+      const res = await fetch("/api/test-config/swagger", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(swaggerForm),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setSwagger((prev) => {
+          const filtered = prev.filter(
+            (ep) =>
+              !(
+                ep.method === data.endpoint.method &&
+                ep.path === data.endpoint.path
+              )
+          );
+          return [data.endpoint, ...filtered];
+        });
+        setSwaggerForm({
+          method: "POST",
+          path: "",
+          summary: "",
+          description: "",
+          request_schema: "",
+          response_schema: "",
+        });
+      } else {
+        alert(`Swagger sync failed: ${responseMessage(data)}`);
+      }
+    } catch (error) {
+      alert(`Swagger error: ${(error as Error).message}`);
+    }
+  };
+
   const tabs = [
     { id: "dashboard", label: "Dashboard", summary: "High-level overview" },
     { id: "registry", label: "Model Registry", summary: "Manage models" },
     { id: "runner", label: "Test Runner", summary: "Execute new tests" },
+    { id: "config", label: "Test Config", summary: "Manage environments & profiles" },
+    { id: "automation", label: "Test Automation", summary: "Configure workflows" },
     { id: "results", label: "Results & Analytics", summary: "Review history" },
     { id: "settings", label: "Settings", summary: "App configuration" },
   ];
@@ -440,6 +669,17 @@ export default function Dashboard({
       { label: "Capture Logs", anchor: "runner-logs" },
       { label: "Validate & Inference", anchor: "runner-validate" },
       { label: "Record Run", anchor: "runner-record" },
+    ],
+    config: [
+      { label: "Server Environments", anchor: "config-envs" },
+      { label: "Test Profiles", anchor: "config-profiles" },
+      { label: "Test Steps", anchor: "config-steps" },
+      { label: "Swagger Endpoints", anchor: "config-swagger" },
+    ],
+    automation: [
+      { label: "Select Profile", anchor: "auto-select" },
+      { label: "Step Overview", anchor: "auto-steps" },
+      { label: "Run Sequence", anchor: "auto-run" },
     ],
     results: [
       { label: "Recent runs" },
@@ -983,12 +1223,528 @@ export default function Dashboard({
     </section>
   );
 
+  const renderConfigTab = () => (
+    <>
+      <section className="card" id="config-envs">
+        <h2>Server Environments</h2>
+        <form onSubmit={handleEnvSubmit}>
+          <div className="form-group">
+            <label>Name</label>
+            <input
+              value={envForm.name}
+              onChange={(e) =>
+                setEnvForm((prev) => ({ ...prev, name: e.target.value }))
+              }
+              required
+            />
+          </div>
+          <div className="grid" style={{ gridTemplateColumns: "repeat(2,1fr)" }}>
+            <div className="form-group">
+              <label>Hostname</label>
+              <input
+                value={envForm.hostname}
+                onChange={(e) =>
+                  setEnvForm((prev) => ({ ...prev, hostname: e.target.value }))
+                }
+              />
+            </div>
+            <div className="form-group">
+              <label>IP Address</label>
+              <input
+                value={envForm.ip_address}
+                onChange={(e) =>
+                  setEnvForm((prev) => ({ ...prev, ip_address: e.target.value }))
+                }
+              />
+            </div>
+          </div>
+          <div className="grid" style={{ gridTemplateColumns: "repeat(2,1fr)" }}>
+            <div className="form-group">
+              <label>GPU Model</label>
+              <input
+                value={envForm.gpu_model}
+                onChange={(e) =>
+                  setEnvForm((prev) => ({ ...prev, gpu_model: e.target.value }))
+                }
+              />
+            </div>
+            <div className="form-group">
+              <label>GPU VRAM (GB)</label>
+              <input
+                value={envForm.gpu_vram_gb}
+                onChange={(e) =>
+                  setEnvForm((prev) => ({
+                    ...prev,
+                    gpu_vram_gb: e.target.value,
+                  }))
+                }
+              />
+            </div>
+          </div>
+          <div className="form-group">
+            <label>CPU Model</label>
+            <input
+              value={envForm.cpu_model}
+              onChange={(e) =>
+                setEnvForm((prev) => ({ ...prev, cpu_model: e.target.value }))
+              }
+            />
+          </div>
+          <div className="grid" style={{ gridTemplateColumns: "repeat(3,1fr)" }}>
+            <div className="form-group">
+              <label>OS</label>
+              <input
+                value={envForm.os_version}
+                onChange={(e) =>
+                  setEnvForm((prev) => ({ ...prev, os_version: e.target.value }))
+                }
+              />
+            </div>
+            <div className="form-group">
+              <label>WSL</label>
+              <input
+                value={envForm.wsl_version}
+                onChange={(e) =>
+                  setEnvForm((prev) => ({ ...prev, wsl_version: e.target.value }))
+                }
+              />
+            </div>
+            <div className="form-group">
+              <label>ROCm</label>
+              <input
+                value={envForm.rocm_version}
+                onChange={(e) =>
+                  setEnvForm((prev) => ({
+                    ...prev,
+                    rocm_version: e.target.value,
+                  }))
+                }
+              />
+            </div>
+          </div>
+          <div className="form-group">
+            <label>Notes</label>
+            <textarea
+              rows={2}
+              value={envForm.notes}
+              onChange={(e) =>
+                setEnvForm((prev) => ({ ...prev, notes: e.target.value }))
+              }
+            />
+          </div>
+          <button className="btn" type="submit">
+            Save Environment
+          </button>
+        </form>
+        {serverEnvs.length > 0 && (
+          <div style={{ marginTop: 12 }}>
+            <p className="muted">Tracked environments:</p>
+            <ul className="muted">
+              {serverEnvs.map((env) => (
+                <li key={env.id}>
+                  {env.name} · {env.gpu_model || "Unknown GPU"}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </section>
+
+      <section className="card" id="config-profiles">
+        <h2>Test Profiles</h2>
+        <form onSubmit={handleProfileSubmit}>
+          <div className="form-group">
+            <label>Name</label>
+            <input
+              value={profileForm.name}
+              onChange={(e) =>
+                setProfileForm((prev) => ({ ...prev, name: e.target.value }))
+              }
+              required
+            />
+          </div>
+          <div className="form-group">
+            <label>Description</label>
+            <input
+              value={profileForm.description}
+              onChange={(e) =>
+                setProfileForm((prev) => ({
+                  ...prev,
+                  description: e.target.value,
+                }))
+              }
+            />
+          </div>
+          <div className="grid" style={{ gridTemplateColumns: "repeat(2,1fr)" }}>
+            <div className="form-group">
+              <label>Staged Model</label>
+              <select
+                value={profileForm.model_test_id}
+                onChange={(e) =>
+                  setProfileForm((prev) => ({
+                    ...prev,
+                    model_test_id: e.target.value,
+                  }))
+                }
+              >
+                <option value="">Select model</option>
+                {localCopies.map((copy) => (
+                  <option key={copy.id} value={copy.id}>
+                    {copy.model_name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="form-group">
+              <label>Server Environment</label>
+              <select
+                value={profileForm.server_environment_id}
+                onChange={(e) =>
+                  setProfileForm((prev) => ({
+                    ...prev,
+                    server_environment_id: e.target.value,
+                  }))
+                }
+              >
+                <option value="">Select environment</option>
+                {serverEnvs.map((env) => (
+                  <option key={env.id} value={env.id}>
+                    {env.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div className="grid" style={{ gridTemplateColumns: "repeat(3,1fr)" }}>
+            <div className="form-group">
+              <label>Prompt</label>
+              <input
+                value={profileForm.default_prompt}
+                onChange={(e) =>
+                  setProfileForm((prev) => ({
+                    ...prev,
+                    default_prompt: e.target.value,
+                  }))
+                }
+              />
+            </div>
+            <div className="form-group">
+              <label>Max Tokens</label>
+              <input
+                value={profileForm.max_tokens}
+                onChange={(e) =>
+                  setProfileForm((prev) => ({
+                    ...prev,
+                    max_tokens: e.target.value,
+                  }))
+                }
+              />
+            </div>
+            <div className="form-group">
+              <label>Temperature</label>
+              <input
+                value={profileForm.temperature}
+                onChange={(e) =>
+                  setProfileForm((prev) => ({
+                    ...prev,
+                    temperature: e.target.value,
+                  }))
+                }
+              />
+            </div>
+          </div>
+          <div className="form-group">
+            <label>Top-p</label>
+            <input
+              value={profileForm.top_p}
+              onChange={(e) =>
+                setProfileForm((prev) => ({ ...prev, top_p: e.target.value }))
+              }
+            />
+          </div>
+          <button className="btn" type="submit">
+            Save Profile
+          </button>
+        </form>
+        {profiles.length > 0 && (
+          <div style={{ marginTop: 12 }}>
+            <p className="muted">Profiles:</p>
+            <ul className="muted">
+              {profiles.map((profile) => (
+                <li key={profile.id}>
+                  {profile.name} · Model #{profile.model_test_id ?? "n/a"}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </section>
+
+      <section className="card" id="config-steps">
+        <h2>Test Steps</h2>
+        <form onSubmit={handleStepSubmit}>
+          <div className="grid" style={{ gridTemplateColumns: "repeat(3,1fr)" }}>
+            <div className="form-group">
+              <label>Profile</label>
+              <select
+                value={stepForm.profile_id}
+                onChange={(e) =>
+                  setStepForm((prev) => ({ ...prev, profile_id: e.target.value }))
+                }
+                required
+              >
+                <option value="">Select profile</option>
+                {profiles.map((profile) => (
+                  <option key={profile.id} value={profile.id}>
+                    {profile.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="form-group">
+              <label>Step Order</label>
+              <input
+                value={stepForm.step_order}
+                onChange={(e) =>
+                  setStepForm((prev) => ({
+                    ...prev,
+                    step_order: e.target.value,
+                  }))
+                }
+                required
+              />
+            </div>
+            <div className="form-group">
+              <label>HTTP Method</label>
+              <input
+                value={stepForm.api_method}
+                onChange={(e) =>
+                  setStepForm((prev) => ({
+                    ...prev,
+                    api_method: e.target.value,
+                  }))
+                }
+                required
+              />
+            </div>
+          </div>
+          <div className="form-group">
+            <label>API Path</label>
+            <input
+              value={stepForm.api_path}
+              onChange={(e) =>
+                setStepForm((prev) => ({ ...prev, api_path: e.target.value }))
+              }
+              required
+            />
+          </div>
+          <div className="form-group">
+            <label>Step Name</label>
+            <input
+              value={stepForm.step_name}
+              onChange={(e) =>
+                setStepForm((prev) => ({ ...prev, step_name: e.target.value }))
+              }
+              required
+            />
+          </div>
+          <div className="form-group">
+            <label>Request Body</label>
+            <textarea
+              rows={3}
+              value={stepForm.request_body}
+              onChange={(e) =>
+                setStepForm((prev) => ({
+                  ...prev,
+                  request_body: e.target.value,
+                }))
+              }
+            />
+          </div>
+          <div className="grid" style={{ gridTemplateColumns: "repeat(3,1fr)" }}>
+            <div className="form-group">
+              <label>Expected Status</label>
+              <input
+                value={stepForm.expected_status}
+                onChange={(e) =>
+                  setStepForm((prev) => ({
+                    ...prev,
+                    expected_status: e.target.value,
+                  }))
+                }
+              />
+            </div>
+            <div className="form-group">
+              <label>Expected Contains</label>
+              <input
+                value={stepForm.expected_contains}
+                onChange={(e) =>
+                  setStepForm((prev) => ({
+                    ...prev,
+                    expected_contains: e.target.value,
+                  }))
+                }
+              />
+            </div>
+            <div className="form-group">
+              <label>Pass Rule</label>
+              <input
+                value={stepForm.pass_rule}
+                onChange={(e) =>
+                  setStepForm((prev) => ({
+                    ...prev,
+                    pass_rule: e.target.value,
+                  }))
+                }
+              />
+            </div>
+          </div>
+          <div className="form-group">
+            <label>Notes</label>
+            <textarea
+              rows={2}
+              value={stepForm.notes}
+              onChange={(e) =>
+                setStepForm((prev) => ({ ...prev, notes: e.target.value }))
+              }
+            />
+          </div>
+          <button className="btn" type="submit">
+            Add Step
+          </button>
+        </form>
+        {profiles.length > 0 && (
+          <p className="muted" style={{ marginTop: 8 }}>
+            Use the Test Automation tab to run steps for a profile.
+          </p>
+        )}
+      </section>
+
+      <section className="card" id="config-swagger">
+        <h2>Swagger Endpoint Catalog</h2>
+        <form onSubmit={handleSwaggerSubmit}>
+          <div className="grid" style={{ gridTemplateColumns: "repeat(3,1fr)" }}>
+            <div className="form-group">
+              <label>Method</label>
+              <input
+                value={swaggerForm.method}
+                onChange={(e) =>
+                  setSwaggerForm((prev) => ({ ...prev, method: e.target.value }))
+                }
+                required
+              />
+            </div>
+            <div className="form-group">
+              <label>Path</label>
+              <input
+                value={swaggerForm.path}
+                onChange={(e) =>
+                  setSwaggerForm((prev) => ({ ...prev, path: e.target.value }))
+                }
+                required
+              />
+            </div>
+            <div className="form-group">
+              <label>Summary</label>
+              <input
+                value={swaggerForm.summary}
+                onChange={(e) =>
+                  setSwaggerForm((prev) => ({
+                    ...prev,
+                    summary: e.target.value,
+                  }))
+                }
+              />
+            </div>
+          </div>
+          <div className="form-group">
+            <label>Description</label>
+            <textarea
+              rows={2}
+              value={swaggerForm.description}
+              onChange={(e) =>
+                setSwaggerForm((prev) => ({
+                  ...prev,
+                  description: e.target.value,
+                }))
+              }
+            />
+          </div>
+          <div className="form-group">
+            <label>Request Schema</label>
+            <textarea
+              rows={2}
+              value={swaggerForm.request_schema}
+              onChange={(e) =>
+                setSwaggerForm((prev) => ({
+                  ...prev,
+                  request_schema: e.target.value,
+                }))
+              }
+            />
+          </div>
+          <div className="form-group">
+            <label>Response Schema</label>
+            <textarea
+              rows={2}
+              value={swaggerForm.response_schema}
+              onChange={(e) =>
+                setSwaggerForm((prev) => ({
+                  ...prev,
+                  response_schema: e.target.value,
+                }))
+              }
+            />
+          </div>
+          <button className="btn" type="submit">
+            Save Endpoint
+          </button>
+        </form>
+        {swagger.length > 0 && (
+          <div style={{ marginTop: 12, maxHeight: 200, overflowY: "auto" }}>
+            <p className="muted">Catalog:</p>
+            <ul className="muted">
+              {swagger.map((ep) => (
+                <li key={`${ep.method}-${ep.path}`}>
+                  {ep.method} {ep.path}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </section>
+    </>
+  );
+
+  const renderAutomationTab = () => (
+    <section className="card" id="auto-select">
+      <h2>Test Automation (Preview)</h2>
+      <p className="muted">
+        Select a profile to view its configured steps. Future iterations will allow running the full
+        sequence automatically.
+      </p>
+      <div className="form-group">
+        <label>Profile</label>
+        <select disabled>
+          <option>Select profile</option>
+        </select>
+      </div>
+      <div className="muted">
+        Connect this tab to a scheduler or runbook to execute the API steps defined in Test Config.
+      </div>
+    </section>
+  );
+
   const renderTabContent = () => {
     switch (activeTab) {
       case "registry":
         return renderRegistryTab();
       case "runner":
         return renderRunnerTab();
+      case "config":
+        return renderConfigTab();
+      case "automation":
+        return renderAutomationTab();
       case "results":
         return renderResultsTab();
       case "settings":
