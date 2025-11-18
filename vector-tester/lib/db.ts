@@ -46,6 +46,66 @@ CREATE TABLE IF NOT EXISTS models_test (
   notes TEXT,
   cached_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS server_environments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  hostname TEXT,
+  ip_address TEXT,
+  gpu_model TEXT,
+  gpu_vram_gb REAL,
+  cpu_model TEXT,
+  os_version TEXT,
+  wsl_version TEXT,
+  rocm_version TEXT,
+  notes TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS test_profiles (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  description TEXT,
+  model_test_id INTEGER,
+  server_environment_id INTEGER,
+  default_prompt TEXT,
+  max_tokens INTEGER,
+  temperature REAL,
+  top_p REAL,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT,
+  FOREIGN KEY (model_test_id) REFERENCES models_test(id) ON DELETE SET NULL,
+  FOREIGN KEY (server_environment_id) REFERENCES server_environments(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS test_steps (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  profile_id INTEGER NOT NULL,
+  step_order INTEGER NOT NULL,
+  step_name TEXT NOT NULL,
+  api_method TEXT NOT NULL,
+  api_path TEXT NOT NULL,
+  request_body TEXT,
+  expected_status INTEGER,
+  expected_contains TEXT,
+  pass_rule TEXT,
+  notes TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (profile_id) REFERENCES test_profiles(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS swagger_endpoints (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  method TEXT NOT NULL,
+  path TEXT NOT NULL,
+  summary TEXT,
+  description TEXT,
+  request_schema TEXT,
+  response_schema TEXT,
+  last_synced TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(method, path)
+);
 `);
 
 export type TestRun = {
@@ -79,6 +139,62 @@ export type TestModelCopy = {
   status: string;
   notes: string | null;
   cached_at: string;
+};
+
+export type ServerEnvironment = {
+  id: number;
+  name: string;
+  hostname: string | null;
+  ip_address: string | null;
+  gpu_model: string | null;
+  gpu_vram_gb: number | null;
+  cpu_model: string | null;
+  os_version: string | null;
+  wsl_version: string | null;
+  rocm_version: string | null;
+  notes: string | null;
+  created_at: string;
+};
+
+export type TestProfile = {
+  id: number;
+  name: string;
+  description: string | null;
+  model_test_id: number | null;
+  server_environment_id: number | null;
+  default_prompt: string | null;
+  max_tokens: number | null;
+  temperature: number | null;
+  top_p: number | null;
+  active: number;
+  created_at: string;
+  updated_at: string | null;
+};
+
+export type TestStep = {
+  id: number;
+  profile_id: number;
+  step_order: number;
+  step_name: string;
+  api_method: string;
+  api_path: string;
+  request_body: string | null;
+  expected_status: number | null;
+  expected_contains: string | null;
+  pass_rule: string | null;
+  notes: string | null;
+  created_at: string;
+};
+
+export type SwaggerEndpoint = {
+  id: number;
+  method: string;
+  path: string;
+  summary: string | null;
+  description: string | null;
+  request_schema: string | null;
+  response_schema: string | null;
+  last_synced: string;
 };
 
 export function getRecentRuns(limit = 15): TestRun[] {
@@ -239,6 +355,188 @@ export function getTestModelByName(model_name: string): TestModelCopy | null {
   const stmt = db.prepare(`SELECT * FROM models_test WHERE model_name = ?`);
   const result = stmt.get(model_name);
   return (result as TestModelCopy) || null;
+}
+
+export function upsertServerEnvironment(env: {
+  name: string;
+  hostname?: string | null;
+  ip_address?: string | null;
+  gpu_model?: string | null;
+  gpu_vram_gb?: number | null;
+  cpu_model?: string | null;
+  os_version?: string | null;
+  wsl_version?: string | null;
+  rocm_version?: string | null;
+  notes?: string | null;
+}): ServerEnvironment {
+  const stmt = db.prepare(
+    `INSERT INTO server_environments
+      (name, hostname, ip_address, gpu_model, gpu_vram_gb, cpu_model, os_version, wsl_version, rocm_version, notes)
+     VALUES
+      (@name, @hostname, @ip_address, @gpu_model, @gpu_vram_gb, @cpu_model, @os_version, @wsl_version, @rocm_version, @notes)
+     ON CONFLICT(name) DO UPDATE SET
+      hostname = excluded.hostname,
+      ip_address = excluded.ip_address,
+      gpu_model = excluded.gpu_model,
+      gpu_vram_gb = excluded.gpu_vram_gb,
+      cpu_model = excluded.cpu_model,
+      os_version = excluded.os_version,
+      wsl_version = excluded.wsl_version,
+      rocm_version = excluded.rocm_version,
+      notes = excluded.notes`
+  );
+  stmt.run({
+    name: env.name,
+    hostname: env.hostname ?? null,
+    ip_address: env.ip_address ?? null,
+    gpu_model: env.gpu_model ?? null,
+    gpu_vram_gb: env.gpu_vram_gb ?? null,
+    cpu_model: env.cpu_model ?? null,
+    os_version: env.os_version ?? null,
+    wsl_version: env.wsl_version ?? null,
+    rocm_version: env.rocm_version ?? null,
+    notes: env.notes ?? null,
+  });
+  const row = db
+    .prepare(`SELECT * FROM server_environments WHERE name = ?`)
+    .get(env.name);
+  return row as ServerEnvironment;
+}
+
+export function getServerEnvironments(): ServerEnvironment[] {
+  const stmt = db.prepare(
+    `SELECT * FROM server_environments ORDER BY datetime(created_at) DESC`
+  );
+  return stmt.all() as ServerEnvironment[];
+}
+
+export function insertTestProfile(profile: {
+  name: string;
+  description?: string;
+  model_test_id?: number | null;
+  server_environment_id?: number | null;
+  default_prompt?: string | null;
+  max_tokens?: number | null;
+  temperature?: number | null;
+  top_p?: number | null;
+}): TestProfile {
+  const stmt = db.prepare(
+    `INSERT INTO test_profiles
+      (name, description, model_test_id, server_environment_id, default_prompt, max_tokens, temperature, top_p)
+     VALUES
+      (@name, @description, @model_test_id, @server_environment_id, @default_prompt, @max_tokens, @temperature, @top_p)`
+  );
+  const info = stmt.run({
+    name: profile.name,
+    description: profile.description ?? null,
+    model_test_id: profile.model_test_id ?? null,
+    server_environment_id: profile.server_environment_id ?? null,
+    default_prompt: profile.default_prompt ?? null,
+    max_tokens: profile.max_tokens ?? null,
+    temperature: profile.temperature ?? null,
+    top_p: profile.top_p ?? null,
+  });
+  return getTestProfileById(Number(info.lastInsertRowid));
+}
+
+export function getTestProfiles(limit = 25): TestProfile[] {
+  const stmt = db.prepare(
+    `SELECT * FROM test_profiles ORDER BY datetime(created_at) DESC LIMIT ?`
+  );
+  return stmt.all(limit) as TestProfile[];
+}
+
+export function getTestProfileById(id: number): TestProfile {
+  const stmt = db.prepare(`SELECT * FROM test_profiles WHERE id = ?`);
+  return stmt.get(id) as TestProfile;
+}
+
+export function insertTestStep(step: {
+  profile_id: number;
+  step_order: number;
+  step_name: string;
+  api_method: string;
+  api_path: string;
+  request_body?: string | null;
+  expected_status?: number | null;
+  expected_contains?: string | null;
+  pass_rule?: string | null;
+  notes?: string | null;
+}): TestStep {
+  const stmt = db.prepare(
+    `INSERT INTO test_steps
+      (profile_id, step_order, step_name, api_method, api_path, request_body, expected_status, expected_contains, pass_rule, notes)
+     VALUES
+      (@profile_id, @step_order, @step_name, @api_method, @api_path, @request_body, @expected_status, @expected_contains, @pass_rule, @notes)`
+  );
+  const info = stmt.run({
+    profile_id: step.profile_id,
+    step_order: step.step_order,
+    step_name: step.step_name,
+    api_method: step.api_method,
+    api_path: step.api_path,
+    request_body: step.request_body ?? null,
+    expected_status: step.expected_status ?? null,
+    expected_contains: step.expected_contains ?? null,
+    pass_rule: step.pass_rule ?? null,
+    notes: step.notes ?? null,
+  });
+  return getTestStepById(Number(info.lastInsertRowid));
+}
+
+export function getStepsForProfile(profile_id: number): TestStep[] {
+  const stmt = db.prepare(
+    `SELECT * FROM test_steps WHERE profile_id = ? ORDER BY step_order ASC`
+  );
+  return stmt.all(profile_id) as TestStep[];
+}
+
+export function getTestStepById(id: number): TestStep {
+  const stmt = db.prepare(`SELECT * FROM test_steps WHERE id = ?`);
+  return stmt.get(id) as TestStep;
+}
+
+export function upsertSwaggerEndpoint(data: {
+  method: string;
+  path: string;
+  summary?: string | null;
+  description?: string | null;
+  request_schema?: string | null;
+  response_schema?: string | null;
+}): SwaggerEndpoint {
+  const stmt = db.prepare(
+    `INSERT INTO swagger_endpoints
+      (method, path, summary, description, request_schema, response_schema)
+     VALUES
+      (@method, @path, @summary, @description, @request_schema, @response_schema)
+     ON CONFLICT(method, path) DO UPDATE SET
+      summary = excluded.summary,
+      description = excluded.description,
+      request_schema = excluded.request_schema,
+      response_schema = excluded.response_schema,
+      last_synced = datetime('now')`
+  );
+  stmt.run({
+    method: data.method.toUpperCase(),
+    path: data.path,
+    summary: data.summary ?? null,
+    description: data.description ?? null,
+    request_schema: data.request_schema ?? null,
+    response_schema: data.response_schema ?? null,
+  });
+  const row = db
+    .prepare(
+      `SELECT * FROM swagger_endpoints WHERE method = ? AND path = ?`
+    )
+    .get(data.method.toUpperCase(), data.path);
+  return row as SwaggerEndpoint;
+}
+
+export function getSwaggerEndpoints(): SwaggerEndpoint[] {
+  const stmt = db.prepare(
+    `SELECT * FROM swagger_endpoints ORDER BY path, method`
+  );
+  return stmt.all() as SwaggerEndpoint[];
 }
 
 export { db };
