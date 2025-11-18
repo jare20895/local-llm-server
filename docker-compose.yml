@@ -65,6 +65,7 @@ services:
     tty: true
 
   llm-frontend:
+    profiles: ["prod"]
     build:
       context: .
       dockerfile: vector-tester/Dockerfile
@@ -81,3 +82,26 @@ services:
     depends_on:
       - llm-server
     restart: unless-stopped
+
+  llm-frontend-dev:
+    image: node:20-alpine
+    container_name: vector-tester-frontend-dev
+    working_dir: /app
+    command: sh -c "npm install && npm run dev"
+    environment:
+      - LLM_API_BASE=http://llm-server:8000
+      - LOG_DB_PATH=/app/data/vector-tester.db
+      - NEXT_TELEMETRY_DISABLED=1
+      - PORT=3000
+    volumes:
+      - ./vector-tester:/app
+      - vector_tester_node_modules:/app/node_modules
+      - ./vector-tester/data:/app/data
+    ports:
+      - "4174:3000"
+    depends_on:
+      - llm-server
+    restart: unless-stopped
+
+volumes:
+  vector_tester_node_modules:
