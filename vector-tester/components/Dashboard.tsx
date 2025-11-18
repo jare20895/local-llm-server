@@ -681,7 +681,7 @@ export default function Dashboard({
           notes: "",
           step_order: String(Number(prev.step_order) + 1),
         }));
-        setStepCount((prev) => prev + 1);
+        setStepCount((prev: number) => prev + 1);
         fetchStepsForProfile(String(payload.profile_id));
       } else {
         alert(`Failed to save step: ${responseMessage(data)}`);
@@ -929,7 +929,7 @@ export default function Dashboard({
       body: JSON.stringify({ id: editStepForm.id }),
     });
     setStepList((prev) => prev.filter((step) => step.id !== editStepForm.id));
-    setStepCount((prev) => Math.max(0, prev - 1));
+    setStepCount((prev: number) => Math.max(0, prev - 1));
     closeModal();
   };
 
