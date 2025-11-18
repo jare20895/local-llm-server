@@ -37,6 +37,8 @@ export default function Dashboard({
   initialSwagger,
   initialStepCount,
 }: Props) {
+  const [configSection, setConfigSection] = useState("overview");
+  const [stepCount, setStepCount] = useState(initialStepCount);
   const [form, setForm] = useState({
     model_name: "",
     scenario: "",
@@ -2554,5 +2556,3 @@ export default function Dashboard({
     </div>
   );
 }
-  const [configSection, setConfigSection] = useState("overview");
-  const [stepCount, setStepCount] = useState(initialStepCount);

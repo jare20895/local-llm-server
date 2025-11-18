@@ -633,7 +633,9 @@ export function deleteSwaggerEndpoint(id: number) {
 }
 
 export function countTestSteps(): number {
-  const row = db.prepare(`SELECT COUNT(*) as count FROM test_steps`).get();
+  const row = db
+    .prepare(`SELECT COUNT(*) as count FROM test_steps`)
+    .get() as { count: number } | undefined;
   return row?.count ?? 0;
 }
 
