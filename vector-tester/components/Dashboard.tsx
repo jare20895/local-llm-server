@@ -13,6 +13,7 @@ import type {
 import type { LlmStatus, ModelSummary } from "@/lib/llm";
 
 type SidebarItem = { label: string; anchor?: string };
+type SidebarItem = { label: string; anchor?: string; section?: string };
 
 type Props = {
   initialRuns: TestRun[];
@@ -23,6 +24,7 @@ type Props = {
   initialServerEnvs: ServerEnvironment[];
   initialProfiles: TestProfile[];
   initialSwagger: SwaggerEndpoint[];
+  initialStepCount: number;
 };
 
 export default function Dashboard({
@@ -34,6 +36,7 @@ export default function Dashboard({
   initialServerEnvs,
   initialProfiles,
   initialSwagger,
+  initialStepCount,
 }: Props) {
   const [form, setForm] = useState({
     model_name: "",
@@ -679,6 +682,7 @@ export default function Dashboard({
           notes: "",
           step_order: String(Number(prev.step_order) + 1),
         }));
+        setStepCount((prev) => prev + 1);
         fetchStepsForProfile(String(payload.profile_id));
       } else {
         alert(`Failed to save step: ${responseMessage(data)}`);
@@ -926,6 +930,7 @@ export default function Dashboard({
       body: JSON.stringify({ id: editStepForm.id }),
     });
     setStepList((prev) => prev.filter((step) => step.id !== editStepForm.id));
+    setStepCount((prev) => Math.max(0, prev - 1));
     closeModal();
   };
 
@@ -1009,10 +1014,11 @@ export default function Dashboard({
       { label: "Record Run", anchor: "runner-record" },
     ],
     config: [
-      { label: "Server Environments", anchor: "config-envs" },
-      { label: "Test Profiles", anchor: "config-profiles" },
-      { label: "Test Steps", anchor: "config-steps" },
-      { label: "Swagger Endpoints", anchor: "config-swagger" },
+      { label: "Overview", section: "overview" },
+      { label: "Server Environments", section: "envs" },
+      { label: "Test Profiles", section: "profiles" },
+      { label: "Test Steps", section: "steps" },
+      { label: "Swagger Endpoints", section: "swagger" },
     ],
     automation: [
       { label: "Select Profile", anchor: "auto-select" },
@@ -1561,9 +1567,41 @@ export default function Dashboard({
     </section>
   );
 
-  const renderConfigTab = () => (
-    <>
-      <section className="card" id="config-envs">
+  const renderConfigOverview = () => (
+    <div className="grid grid-2">
+      <section className="card">
+        <h3>Server Environments</h3>
+        <p className="muted">{serverEnvs.length} tracked</p>
+        <button className="btn" onClick={() => setConfigSection("envs")}>
+          Manage
+        </button>
+      </section>
+      <section className="card">
+        <h3>Test Profiles</h3>
+        <p className="muted">{profiles.length} defined</p>
+        <button className="btn" onClick={() => setConfigSection("profiles")}>
+          Manage
+        </button>
+      </section>
+      <section className="card">
+        <h3>Test Steps</h3>
+        <p className="muted">{stepCount} total steps</p>
+        <button className="btn" onClick={() => setConfigSection("steps")}>
+          Manage
+        </button>
+      </section>
+      <section className="card">
+        <h3>Swagger Endpoints</h3>
+        <p className="muted">{swagger.length} cataloged</p>
+        <button className="btn" onClick={() => setConfigSection("swagger")}>
+          Manage
+        </button>
+      </section>
+    </div>
+  );
+
+  const renderEnvSection = () => (
+    <section className="card" id="config-envs">
         <h2>Server Environments</h2>
         <form onSubmit={handleEnvSubmit}>
           <div className="form-group">
@@ -1703,7 +1741,9 @@ export default function Dashboard({
           </div>
         )}
       </section>
+  );
 
+  const renderProfileSection = () => (
       <section className="card" id="config-profiles">
         <h2>Test Profiles</h2>
         <form onSubmit={handleProfileSubmit}>
@@ -1849,7 +1889,9 @@ export default function Dashboard({
           </div>
         )}
       </section>
+  );
 
+  const renderStepsSection = () => (
       <section className="card" id="config-steps">
         <h2>Test Steps</h2>
         <form onSubmit={handleStepSubmit}>
@@ -2036,7 +2078,9 @@ export default function Dashboard({
           </div>
         )}
       </section>
+  );
 
+  const renderSwaggerSection = () => (
       <section className="card" id="config-swagger">
         <h2>Swagger Endpoint Catalog</h2>
         <form onSubmit={handleSwaggerSubmit}>
@@ -2146,6 +2190,15 @@ export default function Dashboard({
           </div>
         )}
       </section>
+  );
+
+  const renderConfigTab = () => (
+    <>
+      {configSection === "overview" && renderConfigOverview()}
+      {configSection === "envs" && renderEnvSection()}
+      {configSection === "profiles" && renderProfileSection()}
+      {configSection === "steps" && renderStepsSection()}
+      {configSection === "swagger" && renderSwaggerSection()}
     </>
   );
 
@@ -2470,7 +2523,24 @@ export default function Dashboard({
           <ul>
             {sidebarSections[activeTab].map((item) => (
               <li key={item.label}>
-                {item.anchor ? (
+                {activeTab === "config" && item.section ? (
+                  <button
+                    className="btn"
+                    style={{
+                      background: configSection === item.section ? "#2563eb" : "transparent",
+                      color: configSection === item.section ? "#fff" : "var(--text-muted)",
+                      border:
+                        configSection === item.section
+                          ? "1px solid rgba(255,255,255,0.2)"
+                          : "1px solid transparent",
+                      width: "100%",
+                      justifyContent: "flex-start",
+                    }}
+                    onClick={() => setConfigSection(item.section!)}
+                  >
+                    {item.label}
+                  </button>
+                ) : item.anchor ? (
                   <a href={`#${item.anchor}`}>• {item.label}</a>
                 ) : (
                   <>• {item.label}</>
@@ -2485,3 +2555,5 @@ export default function Dashboard({
     </div>
   );
 }
+  const [configSection, setConfigSection] = useState("overview");
+  const [stepCount, setStepCount] = useState(initialStepCount);

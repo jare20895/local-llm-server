@@ -632,6 +632,11 @@ export function deleteSwaggerEndpoint(id: number) {
   db.prepare(`DELETE FROM swagger_endpoints WHERE id = ?`).run(id);
 }
 
+export function countTestSteps(): number {
+  const row = db.prepare(`SELECT COUNT(*) as count FROM test_steps`).get();
+  return row?.count ?? 0;
+}
+
 export { db };
 export function updateServerEnvironment(data: {
   id: number;

@@ -14,6 +14,7 @@ export default async function Page() {
       initialServerEnvs={data.serverEnvs}
       initialProfiles={data.profiles}
       initialSwagger={data.swagger}
+      initialStepCount={data.stepCount}
     />
   );
 }

@@ -4,8 +4,8 @@ import {
   getTestModels,
   getServerEnvironments,
   getTestProfiles,
-  getStepsForProfile,
   getSwaggerEndpoints,
+  countTestSteps,
 } from "@/lib/db";
 import { fetchModels, fetchStatus } from "@/lib/llm";
 
@@ -29,6 +29,7 @@ export async function getDashboardData() {
     getTestProfiles(),
     getSwaggerEndpoints(),
   ]);
+  const stepCount = countTestSteps();
 
   return {
     runs,
@@ -39,5 +40,6 @@ export async function getDashboardData() {
     serverEnvs,
     profiles,
     swagger,
+    stepCount,
   };
 }
