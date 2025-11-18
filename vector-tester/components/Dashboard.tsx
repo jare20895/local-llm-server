@@ -8,6 +8,7 @@ import type {
   ServerEnvironment,
   TestProfile,
   SwaggerEndpoint,
+  TestStep,
 } from "@/lib/db";
 import type { LlmStatus, ModelSummary } from "@/lib/llm";
 
@@ -109,6 +110,58 @@ export default function Dashboard({
   });
   const [swaggerForm, setSwaggerForm] = useState({
     method: "POST",
+    path: "",
+    summary: "",
+    description: "",
+    request_schema: "",
+    response_schema: "",
+  });
+  const [stepListProfile, setStepListProfile] = useState("");
+  const [stepList, setStepList] = useState<TestStep[]>([]);
+  const [modal, setModal] = useState<{
+    type: "env" | "profile" | "step" | "swagger";
+    data?: any;
+  } | null>(null);
+  const [editEnvForm, setEditEnvForm] = useState({
+    id: 0,
+    name: "",
+    hostname: "",
+    ip_address: "",
+    gpu_model: "",
+    gpu_vram_gb: "",
+    cpu_model: "",
+    os_version: "",
+    wsl_version: "",
+    rocm_version: "",
+    notes: "",
+  });
+  const [editProfileForm, setEditProfileForm] = useState({
+    id: 0,
+    name: "",
+    description: "",
+    model_test_id: "",
+    server_environment_id: "",
+    default_prompt: "",
+    max_tokens: "",
+    temperature: "",
+    top_p: "",
+  });
+  const [editStepForm, setEditStepForm] = useState({
+    id: 0,
+    profile_id: "",
+    step_order: "",
+    step_name: "",
+    api_method: "",
+    api_path: "",
+    request_body: "",
+    expected_status: "",
+    expected_contains: "",
+    pass_rule: "",
+    notes: "",
+  });
+  const [editSwaggerForm, setEditSwaggerForm] = useState({
+    id: 0,
+    method: "",
     path: "",
     summary: "",
     description: "",
@@ -232,6 +285,37 @@ export default function Dashboard({
       setSelectedModel(models[0].model_name);
     }
   }, [models, selectedModel]);
+
+  const fetchStepsForProfile = useCallback(async (profileId: string) => {
+    if (!profileId) {
+      setStepList([]);
+      return;
+    }
+    try {
+      const res = await fetch(
+        `/api/test-config/test-steps?profile_id=${profileId}`
+      );
+      if (res.ok) {
+        const data = await res.json();
+        setStepList(data.steps || []);
+      }
+    } catch (error) {
+      console.warn("Failed to load test steps", error);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchStepsForProfile(stepListProfile);
+  }, [stepListProfile, fetchStepsForProfile]);
+
+  useEffect(() => {
+    if (
+      stepListProfile &&
+      !profiles.find((profile) => String(profile.id) === stepListProfile)
+    ) {
+      setStepListProfile("");
+    }
+  }, [profiles, stepListProfile]);
 
   useEffect(() => {
     if (!form.model_name && localCopies.length > 0) {
@@ -595,6 +679,7 @@ export default function Dashboard({
           notes: "",
           step_order: String(Number(prev.step_order) + 1),
         }));
+        fetchStepsForProfile(String(payload.profile_id));
       } else {
         alert(`Failed to save step: ${responseMessage(data)}`);
       }
@@ -637,6 +722,259 @@ export default function Dashboard({
     } catch (error) {
       alert(`Swagger error: ${(error as Error).message}`);
     }
+  };
+
+  const closeModal = () => setModal(null);
+
+  const openEnvModal = (env: ServerEnvironment) => {
+    setEditEnvForm({
+      id: env.id,
+      name: env.name,
+      hostname: env.hostname ?? "",
+      ip_address: env.ip_address ?? "",
+      gpu_model: env.gpu_model ?? "",
+      gpu_vram_gb: env.gpu_vram_gb ? String(env.gpu_vram_gb) : "",
+      cpu_model: env.cpu_model ?? "",
+      os_version: env.os_version ?? "",
+      wsl_version: env.wsl_version ?? "",
+      rocm_version: env.rocm_version ?? "",
+      notes: env.notes ?? "",
+    });
+    setModal({ type: "env", data: env });
+  };
+
+  const handleEnvUpdate = async (event: React.FormEvent) => {
+    event.preventDefault();
+    try {
+      const payload = {
+        ...editEnvForm,
+        gpu_vram_gb: editEnvForm.gpu_vram_gb
+          ? Number(editEnvForm.gpu_vram_gb)
+          : undefined,
+      };
+      const res = await fetch("/api/test-config/server-environments", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setServerEnvs((prev) => {
+          const filtered = prev.filter((e) => e.id !== data.environment.id);
+          return [data.environment, ...filtered];
+        });
+        closeModal();
+      } else {
+        alert(`Update failed: ${responseMessage(data)}`);
+      }
+    } catch (error) {
+      alert(`Update error: ${(error as Error).message}`);
+    }
+  };
+
+  const handleEnvDelete = async () => {
+    if (!editEnvForm.id) return;
+    if (!confirm("Delete this environment?")) return;
+    await fetch("/api/test-config/server-environments", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: editEnvForm.id }),
+    });
+    setServerEnvs((prev) => prev.filter((env) => env.id !== editEnvForm.id));
+    closeModal();
+  };
+
+  const openProfileModal = (profile: TestProfile) => {
+    setEditProfileForm({
+      id: profile.id,
+      name: profile.name,
+      description: profile.description ?? "",
+      model_test_id: profile.model_test_id
+        ? String(profile.model_test_id)
+        : "",
+      server_environment_id: profile.server_environment_id
+        ? String(profile.server_environment_id)
+        : "",
+      default_prompt: profile.default_prompt ?? "",
+      max_tokens: profile.max_tokens ? String(profile.max_tokens) : "",
+      temperature: profile.temperature ? String(profile.temperature) : "",
+      top_p: profile.top_p ? String(profile.top_p) : "",
+    });
+    setModal({ type: "profile", data: profile });
+  };
+
+  const handleProfileUpdate = async (event: React.FormEvent) => {
+    event.preventDefault();
+    try {
+      const payload = {
+        id: editProfileForm.id,
+        name: editProfileForm.name,
+        description: editProfileForm.description || undefined,
+        model_test_id: editProfileForm.model_test_id
+          ? Number(editProfileForm.model_test_id)
+          : undefined,
+        server_environment_id: editProfileForm.server_environment_id
+          ? Number(editProfileForm.server_environment_id)
+          : undefined,
+        default_prompt: editProfileForm.default_prompt || undefined,
+        max_tokens: editProfileForm.max_tokens
+          ? Number(editProfileForm.max_tokens)
+          : undefined,
+        temperature: editProfileForm.temperature
+          ? Number(editProfileForm.temperature)
+          : undefined,
+        top_p: editProfileForm.top_p
+          ? Number(editProfileForm.top_p)
+          : undefined,
+      };
+      const res = await fetch("/api/test-config/test-profiles", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setProfiles((prev) => {
+          const filtered = prev.filter((p) => p.id !== data.profile.id);
+          return [data.profile, ...filtered];
+        });
+        closeModal();
+      } else {
+        alert(`Update failed: ${responseMessage(data)}`);
+      }
+    } catch (error) {
+      alert(`Update error: ${(error as Error).message}`);
+    }
+  };
+
+  const handleProfileDelete = async () => {
+    if (!editProfileForm.id) return;
+    if (!confirm("Delete this profile?")) return;
+    await fetch("/api/test-config/test-profiles", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: editProfileForm.id }),
+    });
+    setProfiles((prev) => prev.filter((profile) => profile.id !== editProfileForm.id));
+    closeModal();
+  };
+
+  const openStepModal = (step: TestStep) => {
+    setEditStepForm({
+      id: step.id,
+      profile_id: String(step.profile_id),
+      step_order: String(step.step_order),
+      step_name: step.step_name,
+      api_method: step.api_method,
+      api_path: step.api_path,
+      request_body: step.request_body ?? "",
+      expected_status: step.expected_status
+        ? String(step.expected_status)
+        : "",
+      expected_contains: step.expected_contains ?? "",
+      pass_rule: step.pass_rule ?? "",
+      notes: step.notes ?? "",
+    });
+    setModal({ type: "step", data: step });
+  };
+
+  const handleStepUpdate = async (event: React.FormEvent) => {
+    event.preventDefault();
+    try {
+      const payload = {
+        id: editStepForm.id,
+        step_order: Number(editStepForm.step_order),
+        step_name: editStepForm.step_name,
+        api_method: editStepForm.api_method,
+        api_path: editStepForm.api_path,
+        request_body: editStepForm.request_body || undefined,
+        expected_status: editStepForm.expected_status
+          ? Number(editStepForm.expected_status)
+          : undefined,
+        expected_contains: editStepForm.expected_contains || undefined,
+        pass_rule: editStepForm.pass_rule || undefined,
+        notes: editStepForm.notes || undefined,
+      };
+      const res = await fetch("/api/test-config/test-steps", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setStepList((prev) => {
+          const filtered = prev.filter((s) => s.id !== data.step.id);
+          return [...filtered, data.step].sort(
+            (a, b) => a.step_order - b.step_order
+          );
+        });
+        closeModal();
+      } else {
+        alert(`Update failed: ${responseMessage(data)}`);
+      }
+    } catch (error) {
+      alert(`Update error: ${(error as Error).message}`);
+    }
+  };
+
+  const handleStepDelete = async () => {
+    if (!editStepForm.id) return;
+    if (!confirm("Delete this step?")) return;
+    await fetch("/api/test-config/test-steps", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: editStepForm.id }),
+    });
+    setStepList((prev) => prev.filter((step) => step.id !== editStepForm.id));
+    closeModal();
+  };
+
+  const openSwaggerModal = (entry: SwaggerEndpoint) => {
+    setEditSwaggerForm({
+      id: entry.id,
+      method: entry.method,
+      path: entry.path,
+      summary: entry.summary ?? "",
+      description: entry.description ?? "",
+      request_schema: entry.request_schema ?? "",
+      response_schema: entry.response_schema ?? "",
+    });
+    setModal({ type: "swagger", data: entry });
+  };
+
+  const handleSwaggerUpdate = async (event: React.FormEvent) => {
+    event.preventDefault();
+    try {
+      const res = await fetch("/api/test-config/swagger", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(editSwaggerForm),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setSwagger((prev) => {
+          const filtered = prev.filter((e) => e.id !== editSwaggerForm.id);
+          return [data.endpoint, ...filtered];
+        });
+        closeModal();
+      } else {
+        alert(`Update failed: ${responseMessage(data)}`);
+      }
+    } catch (error) {
+      alert(`Update error: ${(error as Error).message}`);
+    }
+  };
+
+  const handleSwaggerDelete = async () => {
+    if (!editSwaggerForm.id) return;
+    if (!confirm("Delete this endpoint?")) return;
+    await fetch("/api/test-config/swagger", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: editSwaggerForm.id }),
+    });
+    setSwagger((prev) => prev.filter((ep) => ep.id !== editSwaggerForm.id));
+    closeModal();
   };
 
   const tabs = [
@@ -1337,15 +1675,31 @@ export default function Dashboard({
           </button>
         </form>
         {serverEnvs.length > 0 && (
-          <div style={{ marginTop: 12 }}>
-            <p className="muted">Tracked environments:</p>
-            <ul className="muted">
-              {serverEnvs.map((env) => (
-                <li key={env.id}>
-                  {env.name} · {env.gpu_model || "Unknown GPU"}
-                </li>
-              ))}
-            </ul>
+          <div style={{ marginTop: 12, overflowX: "auto" }}>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>GPU</th>
+                  <th>IP</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {serverEnvs.map((env) => (
+                  <tr key={env.id}>
+                    <td>{env.name}</td>
+                    <td>{env.gpu_model || "Unknown"}</td>
+                    <td>{env.ip_address || "—"}</td>
+                    <td>
+                      <button className="btn" onClick={() => openEnvModal(env)}>
+                        Edit
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </section>
@@ -1467,15 +1821,31 @@ export default function Dashboard({
           </button>
         </form>
         {profiles.length > 0 && (
-          <div style={{ marginTop: 12 }}>
-            <p className="muted">Profiles:</p>
-            <ul className="muted">
-              {profiles.map((profile) => (
-                <li key={profile.id}>
-                  {profile.name} · Model #{profile.model_test_id ?? "n/a"}
-                </li>
-              ))}
-            </ul>
+          <div style={{ marginTop: 12, overflowX: "auto" }}>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Model</th>
+                  <th>Environment</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {profiles.map((profile) => (
+                  <tr key={profile.id}>
+                    <td>{profile.name}</td>
+                    <td>{profile.model_test_id ?? "—"}</td>
+                    <td>{profile.server_environment_id ?? "—"}</td>
+                    <td>
+                      <button className="btn" onClick={() => openProfileModal(profile)}>
+                        Edit
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </section>
@@ -1489,7 +1859,10 @@ export default function Dashboard({
               <select
                 value={stepForm.profile_id}
                 onChange={(e) =>
-                  setStepForm((prev) => ({ ...prev, profile_id: e.target.value }))
+                  {
+                    setStepForm((prev) => ({ ...prev, profile_id: e.target.value }));
+                    setStepListProfile(e.target.value);
+                  }
                 }
                 required
               >
@@ -1613,10 +1986,54 @@ export default function Dashboard({
             Add Step
           </button>
         </form>
-        {profiles.length > 0 && (
-          <p className="muted" style={{ marginTop: 8 }}>
-            Use the Test Automation tab to run steps for a profile.
-          </p>
+        <div style={{ marginTop: 12 }}>
+          <label className="muted">View steps for profile</label>
+          <select
+            value={stepListProfile}
+            onChange={(e) => setStepListProfile(e.target.value)}
+            style={{ marginLeft: 8 }}
+          >
+            <option value="">Select profile</option>
+            {profiles.map((profile) => (
+              <option key={profile.id} value={profile.id}>
+                {profile.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        {stepListProfile && (
+          <div style={{ marginTop: 12, overflowX: "auto" }}>
+            {stepList.length === 0 ? (
+              <p className="muted">No steps defined for this profile.</p>
+            ) : (
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Name</th>
+                    <th>API</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {stepList.map((step) => (
+                    <tr key={step.id}>
+                      <td>{step.step_order}</td>
+                      <td>{step.step_name}</td>
+                      <td>
+                        {step.api_method} {step.api_path}
+                      </td>
+                      <td>
+                        <button className="btn" onClick={() => openStepModal(step)}>
+                          Edit
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
         )}
       </section>
 
@@ -1695,21 +2112,37 @@ export default function Dashboard({
                 }))
               }
             />
-          </div>
-          <button className="btn" type="submit">
-            Save Endpoint
-          </button>
+        </div>
+        <button className="btn" type="submit">
+          Save Endpoint
+        </button>
         </form>
         {swagger.length > 0 && (
           <div style={{ marginTop: 12, maxHeight: 200, overflowY: "auto" }}>
-            <p className="muted">Catalog:</p>
-            <ul className="muted">
-              {swagger.map((ep) => (
-                <li key={`${ep.method}-${ep.path}`}>
-                  {ep.method} {ep.path}
-                </li>
-              ))}
-            </ul>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Method</th>
+                  <th>Path</th>
+                  <th>Summary</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {swagger.map((ep) => (
+                  <tr key={ep.id}>
+                    <td>{ep.method}</td>
+                    <td>{ep.path}</td>
+                    <td>{ep.summary || "—"}</td>
+                    <td>
+                      <button className="btn" onClick={() => openSwaggerModal(ep)}>
+                        Edit
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </section>
@@ -1734,6 +2167,262 @@ export default function Dashboard({
       </div>
     </section>
   );
+
+  const renderModal = () => {
+    if (!modal) return null;
+    if (modal.type === "env") {
+      return (
+        <div className="modal-overlay">
+          <div className="modal-content">
+            <h3>Edit Server Environment</h3>
+            <form onSubmit={handleEnvUpdate}>
+              <div className="form-group">
+                <label>Name</label>
+                <input
+                  value={editEnvForm.name}
+                  onChange={(e) =>
+                    setEditEnvForm((prev) => ({ ...prev, name: e.target.value }))
+                  }
+                  required
+                />
+              </div>
+              <div className="form-group">
+                <label>Hostname</label>
+                <input
+                  value={editEnvForm.hostname}
+                  onChange={(e) =>
+                    setEditEnvForm((prev) => ({ ...prev, hostname: e.target.value }))
+                  }
+                />
+              </div>
+              <div className="form-group">
+                <label>IP Address</label>
+                <input
+                  value={editEnvForm.ip_address}
+                  onChange={(e) =>
+                    setEditEnvForm((prev) => ({ ...prev, ip_address: e.target.value }))
+                  }
+                />
+              </div>
+              <div className="form-group">
+                <label>GPU Model</label>
+                <input
+                  value={editEnvForm.gpu_model}
+                  onChange={(e) =>
+                    setEditEnvForm((prev) => ({ ...prev, gpu_model: e.target.value }))
+                  }
+                />
+              </div>
+              <div className="form-group">
+                <label>GPU VRAM (GB)</label>
+                <input
+                  value={editEnvForm.gpu_vram_gb}
+                  onChange={(e) =>
+                    setEditEnvForm((prev) => ({
+                      ...prev,
+                      gpu_vram_gb: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+              <div className="form-group">
+                <label>Notes</label>
+                <textarea
+                  rows={2}
+                  value={editEnvForm.notes}
+                  onChange={(e) =>
+                    setEditEnvForm((prev) => ({ ...prev, notes: e.target.value }))
+                  }
+                />
+              </div>
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={handleEnvDelete}
+                >
+                  Delete
+                </button>
+                <button className="btn" type="submit">
+                  Save
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={closeModal}
+                >
+                  Close
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      );
+    }
+    if (modal.type === "profile") {
+      return (
+        <div className="modal-overlay">
+          <div className="modal-content">
+            <h3>Edit Test Profile</h3>
+            <form onSubmit={handleProfileUpdate}>
+              <div className="form-group">
+                <label>Name</label>
+                <input
+                  value={editProfileForm.name}
+                  onChange={(e) =>
+                    setEditProfileForm((prev) => ({ ...prev, name: e.target.value }))
+                  }
+                  required
+                />
+              </div>
+              <div className="form-group">
+                <label>Description</label>
+                <input
+                  value={editProfileForm.description}
+                  onChange={(e) =>
+                    setEditProfileForm((prev) => ({
+                      ...prev,
+                      description: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+              <div className="form-group">
+                <label>Default Prompt</label>
+                <input
+                  value={editProfileForm.default_prompt}
+                  onChange={(e) =>
+                    setEditProfileForm((prev) => ({
+                      ...prev,
+                      default_prompt: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={handleProfileDelete}
+                >
+                  Delete
+                </button>
+                <button className="btn" type="submit">
+                  Save
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={closeModal}
+                >
+                  Close
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      );
+    }
+    if (modal.type === "step") {
+      return (
+        <div className="modal-overlay">
+          <div className="modal-content">
+            <h3>Edit Test Step</h3>
+            <form onSubmit={handleStepUpdate}>
+              <div className="form-group">
+                <label>Step Name</label>
+                <input
+                  value={editStepForm.step_name}
+                  onChange={(e) =>
+                    setEditStepForm((prev) => ({ ...prev, step_name: e.target.value }))
+                  }
+                  required
+                />
+              </div>
+              <div className="form-group">
+                <label>API Path</label>
+                <input
+                  value={editStepForm.api_path}
+                  onChange={(e) =>
+                    setEditStepForm((prev) => ({ ...prev, api_path: e.target.value }))
+                  }
+                  required
+                />
+              </div>
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={handleStepDelete}
+                >
+                  Delete
+                </button>
+                <button className="btn" type="submit">
+                  Save
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={closeModal}
+                >
+                  Close
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      );
+    }
+    if (modal.type === "swagger") {
+      return (
+        <div className="modal-overlay">
+          <div className="modal-content">
+            <h3>Edit Swagger Endpoint</h3>
+            <form onSubmit={handleSwaggerUpdate}>
+              <div className="form-group">
+                <label>Method</label>
+                <input
+                  value={editSwaggerForm.method}
+                  onChange={(e) =>
+                    setEditSwaggerForm((prev) => ({ ...prev, method: e.target.value }))
+                  }
+                />
+              </div>
+              <div className="form-group">
+                <label>Path</label>
+                <input
+                  value={editSwaggerForm.path}
+                  onChange={(e) =>
+                    setEditSwaggerForm((prev) => ({ ...prev, path: e.target.value }))
+                  }
+                />
+              </div>
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={handleSwaggerDelete}
+                >
+                  Delete
+                </button>
+                <button className="btn" type="submit">
+                  Save
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={closeModal}
+                >
+                  Close
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      );
+    }
+    return null;
+  };
 
   const renderTabContent = () => {
     switch (activeTab) {
@@ -1792,6 +2481,7 @@ export default function Dashboard({
         </aside>
         <div className="tab-content">{renderTabContent()}</div>
       </div>
+      {renderModal()}
     </div>
   );
 }

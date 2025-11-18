@@ -1,7 +1,11 @@
 import "server-only";
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { getSwaggerEndpoints, upsertSwaggerEndpoint } from "@/lib/db";
+import {
+  getSwaggerEndpoints,
+  upsertSwaggerEndpoint,
+  deleteSwaggerEndpoint,
+} from "@/lib/db";
 
 const schema = z.object({
   method: z.string().min(3),
@@ -29,4 +33,22 @@ export async function POST(request: Request) {
 
   const endpoint = upsertSwaggerEndpoint(parsed.data);
   return NextResponse.json({ endpoint }, { status: 201 });
+}
+
+const deleteSchema = z.object({
+  id: z.number().int().positive(),
+});
+
+export async function DELETE(request: Request) {
+  const payload = await request.json();
+  const parsed = deleteSchema.safeParse(payload);
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: "Invalid payload", details: parsed.error.flatten() },
+      { status: 400 }
+    );
+  }
+
+  deleteSwaggerEndpoint(parsed.data.id);
+  return NextResponse.json({ success: true });
 }

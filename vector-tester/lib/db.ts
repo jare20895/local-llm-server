@@ -439,6 +439,51 @@ export function insertTestProfile(profile: {
   return getTestProfileById(Number(info.lastInsertRowid));
 }
 
+export function updateTestProfile(data: {
+  id: number;
+  name?: string;
+  description?: string | null;
+  model_test_id?: number | null;
+  server_environment_id?: number | null;
+  default_prompt?: string | null;
+  max_tokens?: number | null;
+  temperature?: number | null;
+  top_p?: number | null;
+  active?: number;
+}): TestProfile {
+  const stmt = db.prepare(
+    `UPDATE test_profiles
+     SET name = COALESCE(@name, name),
+         description = COALESCE(@description, description),
+         model_test_id = COALESCE(@model_test_id, model_test_id),
+         server_environment_id = COALESCE(@server_environment_id, server_environment_id),
+         default_prompt = COALESCE(@default_prompt, default_prompt),
+         max_tokens = COALESCE(@max_tokens, max_tokens),
+         temperature = COALESCE(@temperature, temperature),
+         top_p = COALESCE(@top_p, top_p),
+         active = COALESCE(@active, active),
+         updated_at = datetime('now')
+     WHERE id = @id`
+  );
+  stmt.run({
+    id: data.id,
+    name: data.name,
+    description: data.description ?? null,
+    model_test_id: data.model_test_id ?? null,
+    server_environment_id: data.server_environment_id ?? null,
+    default_prompt: data.default_prompt ?? null,
+    max_tokens: data.max_tokens ?? null,
+    temperature: data.temperature ?? null,
+    top_p: data.top_p ?? null,
+    active: data.active ?? null,
+  });
+  return getTestProfileById(data.id);
+}
+
+export function deleteTestProfile(id: number) {
+  db.prepare(`DELETE FROM test_profiles WHERE id = ?`).run(id);
+}
+
 export function getTestProfiles(limit = 25): TestProfile[] {
   const stmt = db.prepare(
     `SELECT * FROM test_profiles ORDER BY datetime(created_at) DESC LIMIT ?`
@@ -496,6 +541,50 @@ export function getTestStepById(id: number): TestStep {
   return stmt.get(id) as TestStep;
 }
 
+export function updateTestStep(data: {
+  id: number;
+  step_order?: number;
+  step_name?: string;
+  api_method?: string;
+  api_path?: string;
+  request_body?: string | null;
+  expected_status?: number | null;
+  expected_contains?: string | null;
+  pass_rule?: string | null;
+  notes?: string | null;
+}): TestStep {
+  const stmt = db.prepare(
+    `UPDATE test_steps
+     SET step_order = COALESCE(@step_order, step_order),
+         step_name = COALESCE(@step_name, step_name),
+         api_method = COALESCE(@api_method, api_method),
+         api_path = COALESCE(@api_path, api_path),
+         request_body = COALESCE(@request_body, request_body),
+         expected_status = COALESCE(@expected_status, expected_status),
+         expected_contains = COALESCE(@expected_contains, expected_contains),
+         pass_rule = COALESCE(@pass_rule, pass_rule),
+         notes = COALESCE(@notes, notes)
+     WHERE id = @id`
+  );
+  stmt.run({
+    id: data.id,
+    step_order: data.step_order,
+    step_name: data.step_name,
+    api_method: data.api_method,
+    api_path: data.api_path,
+    request_body: data.request_body ?? null,
+    expected_status: data.expected_status ?? null,
+    expected_contains: data.expected_contains ?? null,
+    pass_rule: data.pass_rule ?? null,
+    notes: data.notes ?? null,
+  });
+  return getTestStepById(data.id);
+}
+
+export function deleteTestStep(id: number) {
+  db.prepare(`DELETE FROM test_steps WHERE id = ?`).run(id);
+}
+
 export function upsertSwaggerEndpoint(data: {
   method: string;
   path: string;
@@ -539,4 +628,57 @@ export function getSwaggerEndpoints(): SwaggerEndpoint[] {
   return stmt.all() as SwaggerEndpoint[];
 }
 
+export function deleteSwaggerEndpoint(id: number) {
+  db.prepare(`DELETE FROM swagger_endpoints WHERE id = ?`).run(id);
+}
+
 export { db };
+export function updateServerEnvironment(data: {
+  id: number;
+  name?: string;
+  hostname?: string | null;
+  ip_address?: string | null;
+  gpu_model?: string | null;
+  gpu_vram_gb?: number | null;
+  cpu_model?: string | null;
+  os_version?: string | null;
+  wsl_version?: string | null;
+  rocm_version?: string | null;
+  notes?: string | null;
+}): ServerEnvironment {
+  const stmt = db.prepare(
+    `UPDATE server_environments
+     SET name = COALESCE(@name, name),
+         hostname = COALESCE(@hostname, hostname),
+         ip_address = COALESCE(@ip_address, ip_address),
+         gpu_model = COALESCE(@gpu_model, gpu_model),
+         gpu_vram_gb = COALESCE(@gpu_vram_gb, gpu_vram_gb),
+         cpu_model = COALESCE(@cpu_model, cpu_model),
+         os_version = COALESCE(@os_version, os_version),
+         wsl_version = COALESCE(@wsl_version, wsl_version),
+         rocm_version = COALESCE(@rocm_version, rocm_version),
+         notes = COALESCE(@notes, notes)
+     WHERE id = @id`
+  );
+  stmt.run({
+    id: data.id,
+    name: data.name,
+    hostname: data.hostname ?? null,
+    ip_address: data.ip_address ?? null,
+    gpu_model: data.gpu_model ?? null,
+    gpu_vram_gb: data.gpu_vram_gb ?? null,
+    cpu_model: data.cpu_model ?? null,
+    os_version: data.os_version ?? null,
+    wsl_version: data.wsl_version ?? null,
+    rocm_version: data.rocm_version ?? null,
+    notes: data.notes ?? null,
+  });
+  const row = db
+    .prepare(`SELECT * FROM server_environments WHERE id = ?`)
+    .get(data.id);
+  return row as ServerEnvironment;
+}
+
+export function deleteServerEnvironment(id: number) {
+  db.prepare(`DELETE FROM server_environments WHERE id = ?`).run(id);
+}
