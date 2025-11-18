@@ -7,6 +7,7 @@ export async function forwardLlmRequest(
   const url = `${getApiBase()}${path}`;
   const res = await fetch(url, {
     ...init,
+    cache: "no-store",
     headers: {
       "Content-Type": "application/json",
       ...(init?.headers || {}),

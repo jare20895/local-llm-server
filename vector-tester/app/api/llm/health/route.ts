@@ -1,20 +1,14 @@
 import { NextResponse } from "next/server";
-import { getApiBase, fetchStatus } from "@/lib/llm";
+import { forwardLlmRequest } from "@/lib/llmProxy";
+import { fetchStatus } from "@/lib/llm";
 
 export async function GET() {
-  try {
-    const res = await fetch(`${getApiBase()}/health`, {
-      cache: "no-store",
+  const result = await forwardLlmRequest("/health");
+  if (result.ok) {
+    return NextResponse.json({
+      status: "healthy",
+      detail: result.data || "llm-server responded to /health",
     });
-    if (res.ok) {
-      const data = await res.text();
-      return NextResponse.json({
-        status: "healthy",
-        detail: data || "llm-server responded to /health",
-      });
-    }
-  } catch (error) {
-    console.warn("Health check /health failed, falling back to status", error);
   }
 
   const status = await fetchStatus();

@@ -1,3 +1,4 @@
+import "server-only";
 import { NextResponse } from "next/server";
 import { fetchModels } from "@/lib/llm";
 

@@ -1,3 +1,5 @@
+import "server-only";
+import "server-only";
 import { NextResponse } from "next/server";
 import { forwardLlmRequest } from "@/lib/llmProxy";
 
