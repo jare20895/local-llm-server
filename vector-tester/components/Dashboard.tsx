@@ -12,7 +12,6 @@ import type {
 } from "@/lib/db";
 import type { LlmStatus, ModelSummary } from "@/lib/llm";
 
-type SidebarItem = { label: string; anchor?: string };
 type SidebarItem = { label: string; anchor?: string; section?: string };
 
 type Props = {
