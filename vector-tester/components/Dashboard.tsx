@@ -1084,29 +1084,43 @@ export default function Dashboard({
     }
   };
 
-  const handleConfigTestFormSubmit = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (!selectedStagedModelId) {
+  const handleConfigTestFormSubmit = async (
+    event?: React.FormEvent,
+    modelIdOverride?: number,
+    configTypeOverride?: "config" | "generation"
+  ) => {
+    if (event) {
+      event.preventDefault();
+    }
+    const targetModelId = modelIdOverride ?? selectedStagedModelId;
+    if (!targetModelId) {
       setConfigTestsMessage("Select a staged model first.");
       return;
     }
-    const existingCount = configTestsForSelected.length;
-    const autoName = `CFG${String(existingCount + 1).padStart(3, "0")} ${
-      selectedModel || ""
-    }`.trim();
+    const list = configTests[targetModelId] ?? [];
+    const existingCount = list.length;
+    const autoName = `CFG${String(existingCount + 1).padStart(
+      3,
+      "0"
+    )} ${selectedModel || ""}`.trim();
     const name = configTestForm.name.trim() || autoName;
+    const configType = configTypeOverride ?? configTestForm.config_type;
     await handleCreateConfigTest({
-      model_test_id: selectedStagedModelId,
-      config_type: configTestForm.config_type,
+      model_test_id: targetModelId,
+      config_type: configType,
       name,
       description: configTestForm.description,
     });
-    setConfigTestForm({
-      name: "",
-      description: "",
-      config_type: configTestForm.config_type,
-    });
-    fetchConfigTests(selectedStagedModelId);
+    if (!modelIdOverride) {
+      setConfigTestForm({
+        name: "",
+        description: "",
+        config_type: configTestForm.config_type,
+      });
+      fetchConfigTests(targetModelId);
+    }
+    setConfigTestsMessage(`Created configuration ${name}`);
+    openConfigTestModal(targetModelId, list.length ? list[0].id : 0);
   };
 
   const updateRunnerMessage = (key: keyof typeof runnerMessages, value: string) =>
@@ -1987,27 +2001,49 @@ export default function Dashboard({
             borderBottom: "1px solid rgba(255,255,255,0.05)",
           }}
         >
-          <strong>{copy.model_name}</strong>
-          <p className="muted" style={{ margin: 0 }}>
-            Cached {new Date(copy.cached_at).toLocaleString()} · Status:{" "}
-            {copy.status}
-          </p>
-          <button
-            className="btn"
-            style={{ marginTop: 6 }}
-            onClick={() => handleShowStagedMetadata(copy)}
-            disabled={stagedMetadataLoadingId === copy.id}
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: 12,
+              flexWrap: "wrap",
+            }}
           >
-            {stagedMetadataLoadingId === copy.id ? "Loading..." : "View Metadata"}
-          </button>
-          <button
-            className="btn"
-            style={{ marginTop: 6, marginLeft: 8 }}
-            onClick={() => handleShowConfigDefaults(copy)}
-            disabled={configLoadingId === copy.id}
-          >
-            {configLoadingId === copy.id ? "Loading..." : "View Config Defaults"}
-          </button>
+            <div>
+              <strong>{copy.model_name}</strong>
+              <p className="muted" style={{ margin: 0 }}>
+                Cached {new Date(copy.cached_at).toLocaleString()} · Status:{" "}
+                {copy.status}
+              </p>
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button
+                className="btn"
+                onClick={() => handleShowStagedMetadata(copy)}
+                disabled={stagedMetadataLoadingId === copy.id}
+              >
+                {stagedMetadataLoadingId === copy.id
+                  ? "Loading..."
+                  : "View Metadata"}
+              </button>
+              <button
+                className="btn"
+                onClick={() => handleShowConfigDefaults(copy)}
+                disabled={configLoadingId === copy.id}
+              >
+                {configLoadingId === copy.id
+                  ? "Loading..."
+                  : "View Config Defaults"}
+              </button>
+              <button
+                className="btn"
+                onClick={() => handleOpenConfigBuilder(copy)}
+              >
+                Config Builder
+              </button>
+            </div>
+          </div>
         </div>
       ))}
       {stagedMetadataError && (
