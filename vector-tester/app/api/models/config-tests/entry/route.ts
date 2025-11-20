@@ -8,6 +8,7 @@ import {
 
 const updateSchema = z.object({
   id: z.number().int().positive(),
+  active: z.boolean().optional(),
   inherit_default: z.boolean().optional(),
   value_text: z.string().nullable().optional(),
   value_json: z.string().nullable().optional(),

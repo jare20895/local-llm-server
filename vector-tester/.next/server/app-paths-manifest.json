@@ -1,6 +1,9 @@
 {
   "/api/llm/status/route": "app/api/llm/status/route.js",
+  "/page": "app/page.js",
   "/api/log-events/route": "app/api/log-events/route.js",
-  "/api/huggingface/meta/route": "app/api/huggingface/meta/route.js",
-  "/page": "app/page.js"
+  "/api/models/huggingface/config/route": "app/api/models/huggingface/config/route.js",
+  "/api/models/huggingface/route": "app/api/models/huggingface/route.js",
+  "/api/models/offline/route": "app/api/models/offline/route.js",
+  "/api/models/configs/[id]/route": "app/api/models/configs/[id]/route.js"
 }

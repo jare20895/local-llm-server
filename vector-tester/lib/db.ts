@@ -278,6 +278,11 @@ ensureColumn(
 );
 ensureTimestampColumn("models_test_huggingface", "created_at");
 ensureTimestampColumn("models_test_huggingface", "updated_at");
+ensureColumn(
+  "model_config_test_entries",
+  "active",
+  "INTEGER NOT NULL DEFAULT 1"
+);
 
 export type TestRun = {
   id: number;

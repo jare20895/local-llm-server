@@ -101,6 +101,71 @@ export default function Dashboard({
     notes: "",
   });
   const [activeTab, setActiveTab] = useState("dashboard");
+
+  // UI state for collapsible sections
+  const [runnerExpanded, setRunnerExpanded] = useState<Record<string, boolean>>({
+    health: true,
+    logging: true,
+    unload: false,
+    load: true,
+    alt: false,
+    logs: true,
+    validate: true,
+    record: false,
+  });
+
+  // UI state for consolidated dropdowns
+  const [metadataSyncLevel, setMetadataSyncLevel] = useState<"basic" | "detailed" | "extensive">("basic");
+  const [configSyncSelection, setConfigSyncSelection] = useState({ config: true, generation: false });
+
+  // Active sidebar section for scroll spy
+  const [activeSidebarSection, setActiveSidebarSection] = useState<string>("");
+
+  // Tab persistence via URL and localStorage
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const urlTab = params.get("tab");
+    const urlSection = params.get("section");
+    const storedTab = localStorage.getItem("vectorTester_activeTab");
+
+    const validTabs = ["dashboard", "registry", "metadata", "runner", "config", "automation", "results", "settings"];
+    const tab = urlTab && validTabs.includes(urlTab) ? urlTab : (storedTab && validTabs.includes(storedTab) ? storedTab : "dashboard");
+
+    setActiveTab(tab);
+    if (urlSection && tab === "config") {
+      setConfigSection(urlSection);
+    }
+  }, []);
+
+  const handleTabChange = (tabId: string) => {
+    setActiveTab(tabId);
+    const url = new URL(window.location.href);
+    url.searchParams.set("tab", tabId);
+    if (tabId !== "config") {
+      url.searchParams.delete("section");
+    }
+    window.history.replaceState({}, "", url.toString());
+    localStorage.setItem("vectorTester_activeTab", tabId);
+  };
+
+  const handleConfigSectionChange = (section: string) => {
+    setConfigSection(section);
+    const url = new URL(window.location.href);
+    url.searchParams.set("section", section);
+    window.history.replaceState({}, "", url.toString());
+  };
+
+  const toggleRunnerSection = (section: string) => {
+    setRunnerExpanded(prev => ({ ...prev, [section]: !prev[section] }));
+  };
+
+  const scrollToSection = (anchor: string) => {
+    const element = document.getElementById(anchor);
+    if (element) {
+      element.scrollIntoView({ behavior: "smooth", block: "start" });
+      setActiveSidebarSection(anchor);
+    }
+  };
   const [submitting, setSubmitting] = useState(false);
   const [runs, setRuns] = useState<TestRun[]>(initialRuns);
   const [logs, setLogs] = useState<LogEvent[]>(initialLogs);
@@ -2138,8 +2203,28 @@ const handleCreateConfigTest = async (opts: {
     );
   };
 
+  const handleStagedModelAction = (copy: TestModelCopy, action: string) => {
+    switch (action) {
+      case "metadata":
+        handleShowStagedMetadata(copy);
+        break;
+      case "config-defaults":
+        handleShowConfigDefaults(copy);
+        break;
+      case "builder":
+        handleOpenConfigBuilder(copy, "config");
+        break;
+      case "add-config":
+        handleQuickConfigTest(copy.id, "config");
+        break;
+      case "add-generation":
+        handleQuickConfigTest(copy.id, "generation");
+        break;
+    }
+  };
+
   const renderLocalCopies = () => (
-    <div style={{ maxHeight: 260, overflowY: "auto" }}>
+    <div style={{ maxHeight: 300, overflowY: "auto" }}>
       {localCopies.length === 0 && (
         <p className="muted">No offline copies captured yet.</p>
       )}
@@ -2147,7 +2232,7 @@ const handleCreateConfigTest = async (opts: {
         <div
           key={copy.id}
           style={{
-            padding: "8px 0",
+            padding: "10px 0",
             borderBottom: "1px solid rgba(255,255,255,0.05)",
           }}
         >
@@ -2157,55 +2242,44 @@ const handleCreateConfigTest = async (opts: {
               justifyContent: "space-between",
               alignItems: "center",
               gap: 12,
-              flexWrap: "wrap",
             }}
           >
-            <div>
+            <div style={{ flex: 1, minWidth: 0 }}>
               <strong>{copy.model_name}</strong>
-              <p className="muted" style={{ margin: 0 }}>
+              <p className="muted" style={{ margin: 0, fontSize: 12 }}>
                 Cached {new Date(copy.cached_at).toLocaleString()} · Status:{" "}
                 {copy.status}
               </p>
             </div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <button
                 className="btn"
-                onClick={() => handleShowStagedMetadata(copy)}
-                disabled={stagedMetadataLoadingId === copy.id}
+                onClick={() => handleOpenConfigBuilder(copy, "config")}
+                style={{ padding: "8px 12px", fontSize: 13 }}
               >
-                {stagedMetadataLoadingId === copy.id
-                  ? "Loading..."
-                  : "View Metadata"}
+                Config Builder
               </button>
-              <button
-                className="btn"
-                onClick={() => handleShowConfigDefaults(copy)}
-                disabled={configLoadingId === copy.id}
+              <select
+                className="action-select"
+                value=""
+                onChange={(e) => {
+                  if (e.target.value) {
+                    handleStagedModelAction(copy, e.target.value);
+                    e.target.value = "";
+                  }
+                }}
+                disabled={stagedMetadataLoadingId === copy.id || configLoadingId === copy.id}
               >
-                {configLoadingId === copy.id
-                  ? "Loading..."
-                  : "View Config Defaults"}
-              </button>
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                <button
-                  className="btn"
-                  onClick={() => handleOpenConfigBuilder(copy, "config")}
-                >
-                  Config Builder
-                </button>
-                <button
-                  className="btn"
-                  onClick={() => handleQuickConfigTest(copy.id, "config")}
-                >
-                  + config.json
-                </button>
-                <button
-                  className="btn"
-                  onClick={() => handleQuickConfigTest(copy.id, "generation")}
-                >
-                  + generation_config
-                </button>
-              </div>
+                <option value="">Actions...</option>
+                <option value="metadata">
+                  {stagedMetadataLoadingId === copy.id ? "Loading..." : "View Metadata"}
+                </option>
+                <option value="config-defaults">
+                  {configLoadingId === copy.id ? "Loading..." : "View Config Defaults"}
+                </option>
+                <option value="add-config">+ config.json test</option>
+                <option value="add-generation">+ generation_config test</option>
+              </select>
             </div>
           </div>
         </div>
@@ -2241,68 +2315,66 @@ const handleCreateConfigTest = async (opts: {
             </button>
           </div>
         </div>
-        <button className="btn" onClick={handleOfflineSyncRequest} disabled={!selectedModel}>
-          Stage Test
-        </button>
-        <div
-          style={{
-            display: "flex",
-            gap: 8,
-            flexWrap: "wrap",
-            marginTop: 8,
-          }}
-        >
-          <button
-            className="btn"
-            onClick={() => handleHuggingfaceSync("basic")}
-            disabled={!selectedModel || huggingfaceSyncing}
-          >
-            {huggingfaceSyncing ? "Syncing..." : "Sync Basic Metadata"}
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
+          <button className="btn" onClick={handleOfflineSyncRequest} disabled={!selectedModel}>
+            Stage Test
           </button>
-          <button
-            className="btn"
-            onClick={() => handleHuggingfaceSync("detailed")}
-            disabled={!selectedModel || huggingfaceSyncing}
-          >
-            Include Detailed
-          </button>
-          <button
-            className="btn"
-            onClick={() => handleHuggingfaceSync("extensive")}
-            disabled={!selectedModel || huggingfaceSyncing}
-          >
-            Include Extensive
-          </button>
-        </div>
-        <div
-          style={{
-            display: "flex",
-            gap: 8,
-            flexWrap: "wrap",
-            marginTop: 8,
-          }}
-        >
-          <button
-            className="btn"
-            onClick={() => handleConfigSync(["config"])}
-            disabled={!selectedModel || configSyncing}
-          >
-            {configSyncing ? "Syncing..." : "Sync config.json"}
-          </button>
-          <button
-            className="btn"
-            onClick={() => handleConfigSync(["generation"])}
-            disabled={!selectedModel || configSyncing}
-          >
-            Sync generation_config
-          </button>
-          <button
-            className="btn"
-            onClick={() => handleConfigSync(["config", "generation"])}
-            disabled={!selectedModel || configSyncing}
-          >
-            Sync All Configs
-          </button>
+
+          <div className="form-group" style={{ margin: 0, flex: "0 0 auto" }}>
+            <label style={{ fontSize: 12 }}>Metadata Level</label>
+            <div style={{ display: "flex", gap: 6 }}>
+              <select
+                value={metadataSyncLevel}
+                onChange={(e) => setMetadataSyncLevel(e.target.value as "basic" | "detailed" | "extensive")}
+                style={{ minWidth: 100 }}
+              >
+                <option value="basic">Basic</option>
+                <option value="detailed">Detailed</option>
+                <option value="extensive">Extensive</option>
+              </select>
+              <button
+                className="btn"
+                onClick={() => handleHuggingfaceSync(metadataSyncLevel)}
+                disabled={!selectedModel || huggingfaceSyncing}
+              >
+                {huggingfaceSyncing ? "Syncing..." : "Sync Metadata"}
+              </button>
+            </div>
+          </div>
+
+          <div className="form-group" style={{ margin: 0, flex: "0 0 auto" }}>
+            <label style={{ fontSize: 12 }}>Config Files</label>
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 4 }}>
+                <input
+                  type="checkbox"
+                  checked={configSyncSelection.config}
+                  onChange={(e) => setConfigSyncSelection(prev => ({ ...prev, config: e.target.checked }))}
+                />
+                config.json
+              </label>
+              <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 4 }}>
+                <input
+                  type="checkbox"
+                  checked={configSyncSelection.generation}
+                  onChange={(e) => setConfigSyncSelection(prev => ({ ...prev, generation: e.target.checked }))}
+                />
+                generation_config
+              </label>
+              <button
+                className="btn"
+                onClick={() => {
+                  const selected: string[] = [];
+                  if (configSyncSelection.config) selected.push("config");
+                  if (configSyncSelection.generation) selected.push("generation");
+                  if (selected.length > 0) handleConfigSync(selected);
+                }}
+                disabled={!selectedModel || configSyncing || (!configSyncSelection.config && !configSyncSelection.generation)}
+              >
+                {configSyncing ? "Syncing..." : "Sync Configs"}
+              </button>
+            </div>
+          </div>
         </div>
         {offlineSyncMessage && (
           <p className="muted" style={{ marginTop: 8 }}>
@@ -2651,208 +2723,262 @@ const handleCreateConfigTest = async (opts: {
   const renderRunnerTab = () => (
     <>
       <section className="card" id="runner-health">
-        <h2>Health Check</h2>
-        <p className="muted">
-          Ping the LLM API health endpoint to confirm the orchestration backend is reachable before
-          testing.
-        </p>
-        <button className="btn" onClick={handleHealthCheck}>
-          Run Health Check
-        </button>
-        {runnerMessages.health && (
-          <p className="muted" style={{ marginTop: 8 }}>
-            {runnerMessages.health}
-          </p>
+        <div className="collapsible-header" onClick={() => toggleRunnerSection("health")}>
+          <h2 style={{ margin: 0 }}>Health Check</h2>
+          <span className={`collapse-icon ${!runnerExpanded.health ? "collapsed" : ""}`}>▼</span>
+        </div>
+        {runnerExpanded.health && (
+          <div style={{ marginTop: 12 }}>
+            <p className="muted">
+              Ping the LLM API health endpoint to confirm the orchestration backend is reachable before
+              testing.
+            </p>
+            <button className="btn" onClick={handleHealthCheck}>
+              Run Health Check
+            </button>
+            {runnerMessages.health && (
+              <p className="muted" style={{ marginTop: 8 }}>
+                {runnerMessages.health}
+              </p>
+            )}
+          </div>
         )}
       </section>
 
       <section className="card" id="runner-logging">
-        <h2>Logging & Status Pre-check</h2>
-        <p className="muted">
-          Ensure performance logging is enabled before loading models so failures are captured in the
-          main database.
-        </p>
-        <p className="muted">
-          Current Logging:{" "}
-          {status?.performance_logging ? "Enabled" : "Disabled (toggle in main UI)"}{" "}
-        </p>
-        <button className="btn" onClick={handleStatusCheck}>
-          Refresh Status
-        </button>
-        {runnerMessages.status && (
-          <p className="muted" style={{ marginTop: 8 }}>
-            {runnerMessages.status}
-          </p>
+        <div className="collapsible-header" onClick={() => toggleRunnerSection("logging")}>
+          <h2 style={{ margin: 0 }}>Logging & Status Pre-check</h2>
+          <span className={`collapse-icon ${!runnerExpanded.logging ? "collapsed" : ""}`}>▼</span>
+        </div>
+        {runnerExpanded.logging && (
+          <div style={{ marginTop: 12 }}>
+            <p className="muted">
+              Ensure performance logging is enabled before loading models so failures are captured in the
+              main database.
+            </p>
+            <p className="muted">
+              Current Logging:{" "}
+              {status?.performance_logging ? "Enabled" : "Disabled (toggle in main UI)"}{" "}
+            </p>
+            <button className="btn" onClick={handleStatusCheck}>
+              Refresh Status
+            </button>
+            {runnerMessages.status && (
+              <p className="muted" style={{ marginTop: 8 }}>
+                {runnerMessages.status}
+              </p>
+            )}
+          </div>
         )}
       </section>
 
       <section className="card" id="runner-unload">
-        <h2>Unload Previous Model</h2>
-        <p className="muted">
-          Always free VRAM before attempting a fresh load to avoid conflicts with incompatible
-          models.
-        </p>
-        <button className="btn" onClick={handleUnloadModel}>
-          Unload Current Model
-        </button>
-        {runnerMessages.unload && (
-          <p className="muted" style={{ marginTop: 8 }}>
-            {runnerMessages.unload}
-          </p>
+        <div className="collapsible-header" onClick={() => toggleRunnerSection("unload")}>
+          <h2 style={{ margin: 0 }}>Unload Previous Model</h2>
+          <span className={`collapse-icon ${!runnerExpanded.unload ? "collapsed" : ""}`}>▼</span>
+        </div>
+        {runnerExpanded.unload && (
+          <div style={{ marginTop: 12 }}>
+            <p className="muted">
+              Always free VRAM before attempting a fresh load to avoid conflicts with incompatible
+              models.
+            </p>
+            <button className="btn" onClick={handleUnloadModel}>
+              Unload Current Model
+            </button>
+            {runnerMessages.unload && (
+              <p className="muted" style={{ marginTop: 8 }}>
+                {runnerMessages.unload}
+              </p>
+            )}
+          </div>
         )}
       </section>
 
       <section className="card" id="runner-load">
-        <h2>Load Model</h2>
-        <div className="form-group">
-          <label>Staged Model</label>
-          <select
-            value={form.model_name}
-            onChange={(e) =>
-              setForm((prev) => ({
-                ...prev,
-                model_name: e.target.value,
-              }))
-            }
-            required
-          >
-            <option value="" disabled>
-              Select a staged model
-            </option>
-            {localCopies.map((copy) => (
-              <option key={copy.id} value={copy.model_name}>
-                {copy.model_name}
-              </option>
-            ))}
-          </select>
+        <div className="collapsible-header" onClick={() => toggleRunnerSection("load")}>
+          <h2 style={{ margin: 0 }}>Load Model</h2>
+          <span className={`collapse-icon ${!runnerExpanded.load ? "collapsed" : ""}`}>▼</span>
         </div>
-        <div className="form-group">
-          <label>
-            <input
-              type="checkbox"
-              checked={forceLoad}
-              onChange={(e) => setForceLoad(e.target.checked)}
-            />{" "}
-            Force load even if marked incompatible
-          </label>
-        </div>
-        <button className="btn" onClick={handleLoadModel} disabled={!form.model_name}>
-          Load Selected Model
-        </button>
-        {runnerMessages.load && (
-          <p className="muted" style={{ marginTop: 8 }}>
-            {runnerMessages.load}
-          </p>
+        {runnerExpanded.load && (
+          <div style={{ marginTop: 12 }}>
+            <div className="form-group">
+              <label>Staged Model</label>
+              <select
+                value={form.model_name}
+                onChange={(e) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    model_name: e.target.value,
+                  }))
+                }
+                required
+              >
+                <option value="" disabled>
+                  Select a staged model
+                </option>
+                {localCopies.map((copy) => (
+                  <option key={copy.id} value={copy.model_name}>
+                    {copy.model_name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="form-group">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={forceLoad}
+                  onChange={(e) => setForceLoad(e.target.checked)}
+                />{" "}
+                Force load even if marked incompatible
+              </label>
+            </div>
+            <button className="btn" onClick={handleLoadModel} disabled={!form.model_name}>
+              Load Selected Model
+            </button>
+            {runnerMessages.load && (
+              <p className="muted" style={{ marginTop: 8 }}>
+                {runnerMessages.load}
+              </p>
+            )}
+          </div>
         )}
       </section>
 
       <section className="card" id="runner-alt">
-        <h2>Alternate Load Parameters</h2>
-        <p className="muted">
-          Track variations (attn implementation, dtype, KV cache changes, etc.). Notes are captured
-          in the tester log for future reference.
-        </p>
-        <textarea
-          rows={3}
-          value={altConfigNotes}
-          onChange={(e) => setAltConfigNotes(e.target.value)}
-          placeholder='E.g., "Retry with attn_implementation=eager"'
-          style={{ width: "100%", borderRadius: 8, padding: 10 }}
-        />
-        <button className="btn" style={{ marginTop: 8 }} onClick={handleSaveAltNotes}>
-          Save Notes
-        </button>
+        <div className="collapsible-header" onClick={() => toggleRunnerSection("alt")}>
+          <h2 style={{ margin: 0 }}>Alternate Load Parameters</h2>
+          <span className={`collapse-icon ${!runnerExpanded.alt ? "collapsed" : ""}`}>▼</span>
+        </div>
+        {runnerExpanded.alt && (
+          <div style={{ marginTop: 12 }}>
+            <p className="muted">
+              Track variations (attn implementation, dtype, KV cache changes, etc.). Notes are captured
+              in the tester log for future reference.
+            </p>
+            <textarea
+              rows={3}
+              value={altConfigNotes}
+              onChange={(e) => setAltConfigNotes(e.target.value)}
+              placeholder='E.g., "Retry with attn_implementation=eager"'
+              style={{ width: "100%", borderRadius: 8, padding: 10 }}
+            />
+            <button className="btn" style={{ marginTop: 8 }} onClick={handleSaveAltNotes}>
+              Save Notes
+            </button>
+          </div>
+        )}
       </section>
 
       <section className="card" id="runner-logs">
-        <div style={{ display: "flex", justifyContent: "space-between" }}>
-          <h2>Capture Logs</h2>
-          <button className="btn" onClick={refreshLogs}>
-            Refresh Logs
-          </button>
+        <div className="collapsible-header" onClick={() => toggleRunnerSection("logs")}>
+          <h2 style={{ margin: 0 }}>Capture Logs</h2>
+          <span className={`collapse-icon ${!runnerExpanded.logs ? "collapsed" : ""}`}>▼</span>
         </div>
-        <div style={{ maxHeight: 260, overflowY: "auto" }}>{renderLogsTable()}</div>
+        {runnerExpanded.logs && (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+              <button className="btn" onClick={refreshLogs}>
+                Refresh Logs
+              </button>
+            </div>
+            <div style={{ maxHeight: 260, overflowY: "auto" }}>{renderLogsTable()}</div>
+          </div>
+        )}
       </section>
 
       <section className="card" id="runner-validate">
-        <h2>Validate & Run Inference</h2>
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <div>
-            <button className="btn" onClick={handleValidateModel}>
-              Validate Loaded Model
-            </button>
-            {runnerMessages.validate && (
-              <p className="muted" style={{ marginTop: 6 }}>
-                {runnerMessages.validate}
-              </p>
-            )}
-          </div>
-          <div>
-            <label className="muted">Sample Prompt</label>
-            <textarea
-              rows={3}
-              value={samplePrompt}
-              onChange={(e) => setSamplePrompt(e.target.value)}
-              style={{ width: "100%", borderRadius: 8, padding: 10 }}
-            />
-            <button className="btn" style={{ marginTop: 8 }} onClick={handleInferenceTest}>
-              Run Inference Smoke Test
-            </button>
-            {runnerMessages.inference && (
-              <p className="muted" style={{ marginTop: 6 }}>
-                {runnerMessages.inference}
-              </p>
-            )}
-          </div>
+        <div className="collapsible-header" onClick={() => toggleRunnerSection("validate")}>
+          <h2 style={{ margin: 0 }}>Validate & Run Inference</h2>
+          <span className={`collapse-icon ${!runnerExpanded.validate ? "collapsed" : ""}`}>▼</span>
         </div>
+        {runnerExpanded.validate && (
+          <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 12 }}>
+            <div>
+              <button className="btn" onClick={handleValidateModel}>
+                Validate Loaded Model
+              </button>
+              {runnerMessages.validate && (
+                <p className="muted" style={{ marginTop: 6 }}>
+                  {runnerMessages.validate}
+                </p>
+              )}
+            </div>
+            <div>
+              <label className="muted">Sample Prompt</label>
+              <textarea
+                rows={3}
+                value={samplePrompt}
+                onChange={(e) => setSamplePrompt(e.target.value)}
+                style={{ width: "100%", borderRadius: 8, padding: 10 }}
+              />
+              <button className="btn" style={{ marginTop: 8 }} onClick={handleInferenceTest}>
+                Run Inference Smoke Test
+              </button>
+              {runnerMessages.inference && (
+                <p className="muted" style={{ marginTop: 6 }}>
+                  {runnerMessages.inference}
+                </p>
+              )}
+            </div>
+          </div>
+        )}
       </section>
 
       <section className="card" id="runner-record">
-        <h2>Log Manual Test Attempt</h2>
-        <form onSubmit={handleSubmit}>
-          <div className="form-group">
-            <label>Staged Model</label>
-            <select
-              value={form.model_name}
-              onChange={(e) =>
-                setForm((prev) => ({ ...prev, model_name: e.target.value }))
-              }
-              required
-            >
-              <option value="" disabled>
-                Select a staged model
-              </option>
-              {localCopies.map((copy) => (
-                <option key={copy.id} value={copy.model_name}>
-                  {copy.model_name}
-                </option>
-              ))}
-            </select>
+        <div className="collapsible-header" onClick={() => toggleRunnerSection("record")}>
+          <h2 style={{ margin: 0 }}>Log Manual Test Attempt</h2>
+          <span className={`collapse-icon ${!runnerExpanded.record ? "collapsed" : ""}`}>▼</span>
+        </div>
+        {runnerExpanded.record && (
+          <div style={{ marginTop: 12 }}>
+            <form onSubmit={handleSubmit}>
+              <div className="form-group">
+                <label>Staged Model</label>
+                <select
+                  value={form.model_name}
+                  onChange={(e) =>
+                    setForm((prev) => ({ ...prev, model_name: e.target.value }))
+                  }
+                  required
+                >
+                  <option value="" disabled>
+                    Select a staged model
+                  </option>
+                  {localCopies.map((copy) => (
+                    <option key={copy.id} value={copy.model_name}>
+                      {copy.model_name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="form-group">
+                <label>Scenario / Notes</label>
+                <input
+                  value={form.scenario}
+                  onChange={(e) =>
+                    setForm((prev) => ({ ...prev, scenario: e.target.value }))
+                  }
+                  placeholder="Latency test, GPU swap, etc."
+                />
+              </div>
+              <div className="form-group">
+                <label>Operator Notes</label>
+                <textarea
+                  rows={3}
+                  value={form.notes}
+                  onChange={(e) =>
+                    setForm((prev) => ({ ...prev, notes: e.target.value }))
+                  }
+                />
+              </div>
+              <button className="btn" type="submit" disabled={submitting}>
+                {submitting ? "Logging run..." : "Log Test Attempt"}
+              </button>
+            </form>
           </div>
-          <div className="form-group">
-            <label>Scenario / Notes</label>
-            <input
-              value={form.scenario}
-              onChange={(e) =>
-                setForm((prev) => ({ ...prev, scenario: e.target.value }))
-              }
-              placeholder="Latency test, GPU swap, etc."
-            />
-          </div>
-          <div className="form-group">
-            <label>Operator Notes</label>
-            <textarea
-              rows={3}
-              value={form.notes}
-              onChange={(e) =>
-                setForm((prev) => ({ ...prev, notes: e.target.value }))
-              }
-            />
-          </div>
-          <button className="btn" type="submit" disabled={submitting}>
-            {submitting ? "Logging run..." : "Log Test Attempt"}
-          </button>
-        </form>
+        )}
       </section>
     </>
   );
@@ -4319,7 +4445,7 @@ const handleCreateConfigTest = async (opts: {
           <button
             key={tab.id}
             className={`tab-button ${activeTab === tab.id ? "active" : ""}`}
-            onClick={() => setActiveTab(tab.id)}
+            onClick={() => handleTabChange(tab.id)}
           >
             {tab.label}
           </button>
@@ -4334,25 +4460,20 @@ const handleCreateConfigTest = async (opts: {
               <li key={item.label}>
                 {activeTab === "config" && item.section ? (
                   <button
-                    className="btn"
-                    style={{
-                      background: configSection === item.section ? "#2563eb" : "transparent",
-                      color: configSection === item.section ? "#fff" : "var(--text-muted)",
-                      border:
-                        configSection === item.section
-                          ? "1px solid rgba(255,255,255,0.2)"
-                          : "1px solid transparent",
-                      width: "100%",
-                      justifyContent: "flex-start",
-                    }}
-                    onClick={() => setConfigSection(item.section!)}
+                    className={`sidebar-btn ${configSection === item.section ? "active" : ""}`}
+                    onClick={() => handleConfigSectionChange(item.section!)}
                   >
                     {item.label}
                   </button>
                 ) : item.anchor ? (
-                  <a href={`#${item.anchor}`}>• {item.label}</a>
+                  <button
+                    className={`sidebar-btn ${activeSidebarSection === item.anchor ? "active" : ""}`}
+                    onClick={() => scrollToSection(item.anchor!)}
+                  >
+                    {item.label}
+                  </button>
                 ) : (
-                  <>• {item.label}</>
+                  <span className="muted">• {item.label}</span>
                 )}
               </li>
             ))}
