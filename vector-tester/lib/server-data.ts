@@ -6,6 +6,7 @@ import {
   getTestProfiles,
   getSwaggerEndpoints,
   countTestSteps,
+  getHuggingfaceMetaTags,
 } from "@/lib/db";
 import { fetchModels, fetchStatus } from "@/lib/llm";
 
@@ -19,6 +20,7 @@ export async function getDashboardData() {
     serverEnvs,
     profiles,
     swagger,
+    metadata,
   ] = await Promise.all([
     getRecentRuns(),
     getRecentLogs(),
@@ -28,6 +30,7 @@ export async function getDashboardData() {
     getServerEnvironments(),
     getTestProfiles(),
     getSwaggerEndpoints(),
+    getHuggingfaceMetaTags(),
   ]);
   const stepCount = countTestSteps();
 
@@ -41,5 +44,6 @@ export async function getDashboardData() {
     profiles,
     swagger,
     stepCount,
+    metadata,
   };
 }

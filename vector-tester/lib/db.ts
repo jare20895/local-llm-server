@@ -37,6 +37,29 @@ CREATE TABLE IF NOT EXISTS models_test (
   cached_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS model_parameters (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  description TEXT,
+  data_type TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT,
+  unit TEXT,
+  default_value TEXT
+);
+
+CREATE TABLE IF NOT EXISTS model_parameter_values (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  model_test_id INTEGER NOT NULL,
+  parameter_id INTEGER NOT NULL,
+  value TEXT,
+  json_value TEXT,
+  notes TEXT,
+  recorded_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (model_test_id) REFERENCES models_test(id) ON DELETE CASCADE,
+  FOREIGN KEY (parameter_id) REFERENCES model_parameters(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS server_environments (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL UNIQUE,
@@ -99,6 +122,44 @@ CREATE TABLE IF NOT EXISTS log_events (
   FOREIGN KEY (test_profile_id) REFERENCES test_profiles(id) ON DELETE SET NULL
 );
 
+CREATE TABLE IF NOT EXISTS huggingface_meta (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  canonical_path TEXT NOT NULL UNIQUE,
+  display_path TEXT,
+  element_type TEXT NOT NULL,
+  description TEXT,
+  category TEXT,
+  semantic_role TEXT,
+  example_value TEXT,
+  active INTEGER NOT NULL DEFAULT 1,
+  detailed INTEGER NOT NULL DEFAULT 0,
+  extensive INTEGER NOT NULL DEFAULT 0,
+  parent_path TEXT,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS models_test_huggingface (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  model_test_id INTEGER NOT NULL,
+  meta_id INTEGER NOT NULL,
+  canonical_path TEXT NOT NULL,
+  display_path TEXT,
+  element_type TEXT NOT NULL,
+  value_text TEXT,
+  value_json TEXT,
+  model_card_path TEXT,
+  model_card_section TEXT,
+  source_line INTEGER,
+  detected_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (model_test_id) REFERENCES models_test(id) ON DELETE CASCADE,
+  FOREIGN KEY (meta_id) REFERENCES huggingface_meta(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_models_test_hf_model
+  ON models_test_huggingface(model_test_id);
+CREATE INDEX IF NOT EXISTS idx_models_test_hf_meta
+  ON models_test_huggingface(meta_id);
+
 CREATE TABLE IF NOT EXISTS swagger_endpoints (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   method TEXT NOT NULL,
@@ -155,6 +216,45 @@ export type LogEvent = {
   created_at: string;
 };
 
+export type HuggingfaceMeta = {
+  id: number;
+  canonical_path: string;
+  display_path: string | null;
+  element_type: string;
+  description: string | null;
+  category: string | null;
+  semantic_role: string | null;
+  example_value: string | null;
+  active: number;
+  detailed: number;
+  extensive: number;
+  parent_path: string | null;
+  updated_at: string;
+};
+
+export type ModelHuggingfaceElement = {
+  id: number;
+  model_test_id: number;
+  meta_id: number;
+  canonical_path: string;
+  display_path: string | null;
+  element_type: string;
+  value_text: string | null;
+  value_json: string | null;
+  model_card_path: string | null;
+  model_card_section: string | null;
+  source_line: number | null;
+  detected_at: string;
+};
+
+export type ModelHuggingfaceRecord = ModelHuggingfaceElement & {
+  category: string | null;
+  semantic_role: string | null;
+  active: number;
+  detailed: number;
+  extensive: number;
+};
+
 export type TestModelCopy = {
   id: number;
   source_model_id: number | null;
@@ -166,6 +266,27 @@ export type TestModelCopy = {
   status: string;
   notes: string | null;
   cached_at: string;
+};
+
+export type ModelParameter = {
+  id: number;
+  name: string;
+  description: string | null;
+  data_type: string;
+  unit: string | null;
+  default_value: string | null;
+  created_at: string;
+  updated_at: string | null;
+};
+
+export type ModelParameterValue = {
+  id: number;
+  model_test_id: number;
+  parameter_id: number;
+  value: string | null;
+  json_value: string | null;
+  notes: string | null;
+  recorded_at: string;
 };
 
 export type ServerEnvironment = {
@@ -386,6 +507,165 @@ export function getTestModelByName(model_name: string): TestModelCopy | null {
   const stmt = db.prepare(`SELECT * FROM models_test WHERE model_name = ?`);
   const result = stmt.get(model_name);
   return (result as TestModelCopy) || null;
+}
+
+export function getHuggingfaceMetaTags(): HuggingfaceMeta[] {
+  const stmt = db.prepare(
+    `SELECT * FROM huggingface_meta ORDER BY canonical_path`
+  );
+  return stmt.all() as HuggingfaceMeta[];
+}
+
+export function getHuggingfaceMetaById(id: number): HuggingfaceMeta | null {
+  const stmt = db.prepare(`SELECT * FROM huggingface_meta WHERE id = ?`);
+  return (stmt.get(id) as HuggingfaceMeta) ?? null;
+}
+
+export function updateHuggingfaceMetaTag(data: {
+  id: number;
+  active?: boolean;
+  detailed?: boolean;
+  extensive?: boolean;
+}): HuggingfaceMeta {
+  const updates: string[] = [];
+  const params: Record<string, unknown> = { id: data.id };
+  if (data.active !== undefined) {
+    updates.push("active = @active");
+    params.active = data.active ? 1 : 0;
+  }
+  if (data.detailed !== undefined) {
+    updates.push("detailed = @detailed");
+    params.detailed = data.detailed ? 1 : 0;
+  }
+  if (data.extensive !== undefined) {
+    updates.push("extensive = @extensive");
+    params.extensive = data.extensive ? 1 : 0;
+  }
+  if (updates.length > 0) {
+    const stmt = db.prepare(
+      `UPDATE huggingface_meta
+       SET ${updates.join(", ")},
+           updated_at = datetime('now')
+       WHERE id = @id`
+    );
+    stmt.run(params);
+  }
+  return getHuggingfaceMetaById(data.id)!;
+}
+
+export function getHuggingfaceMetadataForModel(
+  model_test_id: number
+): ModelHuggingfaceRecord[] {
+  const stmt = db.prepare(
+    `SELECT
+       mth.*,
+       hm.category,
+       hm.semantic_role,
+       hm.active,
+       hm.detailed,
+       hm.extensive
+     FROM models_test_huggingface AS mth
+     JOIN huggingface_meta AS hm ON hm.id = mth.meta_id
+     WHERE mth.model_test_id = ?
+     ORDER BY hm.canonical_path, mth.source_line`
+  );
+  return stmt.all(model_test_id) as ModelHuggingfaceRecord[];
+}
+
+export function deleteHuggingfaceMetadataForModel(model_test_id: number) {
+  const stmt = db.prepare(
+    `DELETE FROM models_test_huggingface WHERE model_test_id = ?`
+  );
+  stmt.run(model_test_id);
+}
+
+export function upsertModelParameter(param: {
+  name: string;
+  description?: string | null;
+  data_type: string;
+  unit?: string | null;
+  default_value?: string | null;
+}): ModelParameter {
+  const stmt = db.prepare(
+    `INSERT INTO model_parameters (name, description, data_type, unit, default_value)
+     VALUES (@name, @description, @data_type, @unit, @default_value)
+     ON CONFLICT(name) DO UPDATE SET
+       description = excluded.description,
+       data_type = excluded.data_type,
+       unit = excluded.unit,
+       default_value = excluded.default_value,
+       updated_at = datetime('now')`
+  );
+  stmt.run({
+    name: param.name,
+    description: param.description ?? null,
+    data_type: param.data_type,
+    unit: param.unit ?? null,
+    default_value: param.default_value ?? null,
+  });
+  const row = db
+    .prepare(`SELECT * FROM model_parameters WHERE name = ?`)
+    .get(param.name);
+  return row as ModelParameter;
+}
+
+export function getModelParameters(): ModelParameter[] {
+  const stmt = db.prepare(
+    `SELECT * FROM model_parameters ORDER BY datetime(created_at) DESC`
+  );
+  return stmt.all() as ModelParameter[];
+}
+
+export function insertModelParameterValue(data: {
+  model_test_id: number;
+  parameter_id: number;
+  value?: string | null;
+  json_value?: unknown;
+  notes?: string | null;
+}): ModelParameterValue {
+  const stmt = db.prepare(
+    `INSERT INTO model_parameter_values
+      (model_test_id, parameter_id, value, json_value, notes)
+     VALUES
+      (@model_test_id, @parameter_id, @value, @json_value, @notes)`
+  );
+  const info = stmt.run({
+    model_test_id: data.model_test_id,
+    parameter_id: data.parameter_id,
+    value: data.value ?? null,
+    json_value:
+      data.json_value === undefined || data.json_value === null
+        ? null
+        : typeof data.json_value === "string"
+        ? data.json_value
+        : JSON.stringify(data.json_value),
+    notes: data.notes ?? null,
+  });
+  return getModelParameterValueById(Number(info.lastInsertRowid));
+}
+
+export function getModelParameterValueById(
+  id: number
+): ModelParameterValue {
+  const stmt = db.prepare(
+    `SELECT * FROM model_parameter_values WHERE id = ?`
+  );
+  return stmt.get(id) as ModelParameterValue;
+}
+
+export function getParameterValuesForModel(
+  model_test_id: number
+): ModelParameterValue[] {
+  const stmt = db.prepare(
+    `SELECT * FROM model_parameter_values
+     WHERE model_test_id = ?
+     ORDER BY datetime(recorded_at) DESC`
+  );
+  return stmt.all(model_test_id) as ModelParameterValue[];
+}
+
+export function deleteModelParameterValue(id: number) {
+  db.prepare(`DELETE FROM model_parameter_values WHERE id = ?`).run(id);
 }
 
 export function upsertServerEnvironment(env: {

@@ -108,9 +108,46 @@ An optional companion UI called **Vector-Tester** now ships with the repo. It ru
 - REST endpoints to:
   - `POST /api/test-runs` – register/load attempts initiated from anywhere (UI, scripts, or log scrapers).
   - `PATCH /api/test-runs` – update a run with success/failure + duration.
-  - `POST /api/log-events` – push docker-compose, GPU, or FastAPI log lines into the tester DB even if the main API crashed.
-  - `GET /api/test-runs`, `GET /api/log-events` – power the timeline/log panels in the UI.
+- `POST /api/log-events` – push docker-compose, GPU, or FastAPI log lines into the tester DB even if the main API crashed.
+- `GET /api/test-runs`, `GET /api/log-events` – power the timeline/log panels in the UI.
+  - `POST /api/models/huggingface` – download a model card/YAML header from HuggingFace and persist structured metadata.
+- Dedicated **Metadata** tab that exposes the HuggingFace element catalog so you can toggle which entries are active, detailed-only, or extensive-only.
 - Periodic polling of the main FastAPI service (`LLM_API_BASE`) for `/api/status` and `/api/models` so you can correlate tester notes with actual registry data.
+
+### HuggingFace Metadata Capture
+
+Vector-Tester now keeps HuggingFace model card facts in two normalized tables:
+
+- `huggingface_meta` – catalog of every metadata key/section the scraper has seen. Each row tracks the `ElementType`, semantic role, category, and inclusion flags (`active`, `detailed`, `extensive`).
+- `models_test_huggingface` – per-model snapshots that link back to the catalog, capturing the concrete value, source file/section, and the README line number.
+
+You can trigger a capture from the **Model Offline Preparation** card using the new **Sync HuggingFace Metadata** button or hit the API directly:
+
+```bash
+curl -X POST http://localhost:4173/api/models/huggingface \
+  -H "Content-Type: application/json" \
+  -d '{"model_name": "qwen-3b"}'
+```
+
+Behind the scenes the API shells out to `vector-tester/scripts/sync_hf_metadata.py`, which can also be invoked manually:
+
+```bash
+python3 vector-tester/scripts/sync_hf_metadata.py \
+  --model-test-id 1 \
+  --hf-path Qwen/Qwen2.5-3B-Instruct
+```
+
+The script scans YAML keys, nested mappings, lists, Markdown headings, paragraphs, links, and section summaries. Nested YAML paths are stored as multi-line strings (e.g. `inference:\n  parameters`) so each element preserves its parent/child relationship for later analysis.
+
+Only elements flagged as **active** and not marked as **detailed** or **extensive** are captured by default. The Model Registry tab exposes three buttons:
+
+1. `Sync Basic Metadata` – captures only the baseline active entries (ideal for quick inventories).
+2. `Include Detailed` – runs the scraper with the detailed tier enabled so all `detailed` entries flow into the snapshot (plus the basic ones).
+3. `Include Extensive` – captures every active element, including those tagged as `extensive`.
+
+Use the Metadata tab to flip each element between Active/Inactive and to decide whether a key should be stored only when the Detailed or Extensive buttons are requested.
+
+> Requirements: ensure `python3` plus the `huggingface-hub` and `PyYAML` packages are installed on the machine/container running Vector-Tester (the Docker images now bake these in automatically).
 
 ### Local Development
 

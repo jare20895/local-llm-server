@@ -9,6 +9,7 @@ import type {
   TestProfile,
   SwaggerEndpoint,
   TestStep,
+  HuggingfaceMeta,
 } from "@/lib/db";
 import type { LlmStatus, ModelSummary } from "@/lib/llm";
 
@@ -24,6 +25,7 @@ type Props = {
   initialProfiles: TestProfile[];
   initialSwagger: SwaggerEndpoint[];
   initialStepCount: number;
+  initialMetadata: HuggingfaceMeta[];
 };
 
 export default function Dashboard({
@@ -36,6 +38,7 @@ export default function Dashboard({
   initialProfiles,
   initialSwagger,
   initialStepCount,
+  initialMetadata,
 }: Props) {
   const [configSection, setConfigSection] = useState("overview");
   const [stepCount, setStepCount] = useState(initialStepCount);
@@ -58,12 +61,44 @@ export default function Dashboard({
   const [profiles, setProfiles] = useState<TestProfile[]>(initialProfiles);
   const [swagger, setSwagger] = useState<SwaggerEndpoint[]>(initialSwagger);
   const [statusError, setStatusError] = useState<string | null>(null);
+  const [metadata, setMetadata] = useState<HuggingfaceMeta[]>(initialMetadata);
+  const [metadataFilter, setMetadataFilter] = useState("");
+  const [metaRefreshing, setMetaRefreshing] = useState(false);
+  const [metaUpdating, setMetaUpdating] = useState<Record<number, boolean>>({});
+  const [metaMessage, setMetaMessage] = useState<string | null>(null);
+  type MetaFlag = "active" | "detailed" | "extensive";
+
+  const metadataStats = useMemo(() => {
+    const total = metadata.length;
+    const active = metadata.filter((entry) => entry.active === 1).length;
+    const detailed = metadata.filter((entry) => entry.detailed === 1).length;
+    const extensive = metadata.filter((entry) => entry.extensive === 1).length;
+    return { total, active, detailed, extensive };
+  }, [metadata]);
+
+  const filteredMetadata = useMemo(() => {
+    const query = metadataFilter.trim().toLowerCase();
+    if (!query) {
+      return metadata;
+    }
+    return metadata.filter((entry) => {
+      return (
+        entry.canonical_path.toLowerCase().includes(query) ||
+        (entry.category ?? "").toLowerCase().includes(query) ||
+        (entry.semantic_role ?? "").toLowerCase().includes(query)
+      );
+    });
+  }, [metadataFilter, metadata]);
   const [selectedModel, setSelectedModel] = useState(
     initialModels[0]?.model_name ?? ""
   );
   const [offlineSyncMessage, setOfflineSyncMessage] = useState<string | null>(
     null
   );
+  const [huggingfaceSyncMessage, setHuggingfaceSyncMessage] = useState<
+    string | null
+  >(null);
+  const [huggingfaceSyncing, setHuggingfaceSyncing] = useState(false);
   const [runnerMessages, setRunnerMessages] = useState({
     health: "",
     logging: "",
@@ -422,6 +457,128 @@ export default function Dashboard({
       setOfflineSyncMessage(
         `Could not log request: ${(error as Error).message}`
       );
+    }
+  };
+
+  const handleHuggingfaceSync = async (
+    detailLevel: "basic" | "detailed" | "extensive" = "basic"
+  ) => {
+    if (!selectedModel) return;
+    setHuggingfaceSyncing(true);
+    const levelLabel =
+      detailLevel === "basic"
+        ? "basic"
+        : detailLevel === "detailed"
+        ? "detailed"
+        : "extensive";
+    setHuggingfaceSyncMessage(
+      `Starting HuggingFace sync (${levelLabel})...`
+    );
+    try {
+      const res = await fetch("/api/models/huggingface", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model_name: selectedModel,
+          detail_level: detailLevel,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(
+          data.details || data.error || "Failed to sync metadata"
+        );
+      }
+      if (data.model) {
+        setLocalCopies((prev) => {
+          const filtered = prev.filter(
+            (copy) => copy.model_name !== data.model.model_name
+          );
+          return [data.model, ...filtered];
+        });
+      }
+      const result = data.result ?? {};
+      const totalEntries = result.total_entries ?? 0;
+      const repo = result.repo_id ?? selectedModel;
+      setHuggingfaceSyncMessage(
+        `Captured ${totalEntries} metadata elements from ${repo} (${levelLabel}).`
+      );
+    } catch (error) {
+      setHuggingfaceSyncMessage(
+        `Sync failed: ${(error as Error).message ?? "unknown error"}`
+      );
+    } finally {
+      setHuggingfaceSyncing(false);
+    }
+  };
+
+  const refreshMetadata = useCallback(async () => {
+    setMetaRefreshing(true);
+    try {
+      const res = await fetch("/api/huggingface/meta");
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to refresh metadata");
+      }
+      setMetadata(data.metadata ?? []);
+      setMetaMessage(
+        `Loaded ${(data.metadata ?? []).length} metadata elements.`
+      );
+    } catch (error) {
+      setMetaMessage(`Refresh failed: ${(error as Error).message}`);
+    } finally {
+      setMetaRefreshing(false);
+    }
+  }, []);
+
+  const toggleMetaFlag = async (
+    entry: HuggingfaceMeta,
+    flag: MetaFlag
+  ) => {
+    const currentValue = (entry[flag] as number) === 1;
+    const newValue = !currentValue;
+    setMetaUpdating((prev) => ({ ...prev, [entry.id]: true }));
+    setMetadata((prev) =>
+      prev.map((meta) =>
+        meta.id === entry.id ? { ...meta, [flag]: newValue ? 1 : 0 } : meta
+      )
+    );
+    try {
+      const res = await fetch("/api/huggingface/meta", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: entry.id,
+          [flag]: newValue,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to update flag");
+      }
+      setMetadata((prev) =>
+        prev.map((meta) => (meta.id === entry.id ? data.meta : meta))
+      );
+      setMetaMessage(
+        `Updated ${entry.canonical_path} (${flag} -> ${
+          newValue ? "on" : "off"
+        }).`
+      );
+    } catch (error) {
+      setMetaMessage(
+        `Update failed: ${(error as Error).message}. Reverting changes.`
+      );
+      setMetadata((prev) =>
+        prev.map((meta) =>
+          meta.id === entry.id ? { ...meta, [flag]: currentValue ? 1 : 0 } : meta
+        )
+      );
+    } finally {
+      setMetaUpdating((prev) => {
+        const updated = { ...prev };
+        delete updated[entry.id];
+        return updated;
+      });
     }
   };
 
@@ -1015,6 +1172,7 @@ export default function Dashboard({
   const tabs = [
     { id: "dashboard", label: "Dashboard", summary: "High-level overview" },
     { id: "registry", label: "Model Registry", summary: "Manage models" },
+    { id: "metadata", label: "Metadata", summary: "HuggingFace tags" },
     { id: "runner", label: "Test Runner", summary: "Execute new tests" },
     { id: "config", label: "Test Config", summary: "Manage environments & profiles" },
     { id: "automation", label: "Test Automation", summary: "Configure workflows" },
@@ -1032,6 +1190,10 @@ export default function Dashboard({
       { label: "Select model" },
       { label: "Offline copies" },
       { label: "Registry sync" },
+    ],
+    metadata: [
+      { label: "Catalog" },
+      { label: "Filters & Flags" },
     ],
     runner: [
       { label: "Health Check", anchor: "runner-health" },
@@ -1328,9 +1490,44 @@ export default function Dashboard({
         <button className="btn" onClick={handleOfflineSyncRequest} disabled={!selectedModel}>
           Request Offline Copy
         </button>
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            flexWrap: "wrap",
+            marginTop: 8,
+          }}
+        >
+          <button
+            className="btn"
+            onClick={() => handleHuggingfaceSync("basic")}
+            disabled={!selectedModel || huggingfaceSyncing}
+          >
+            {huggingfaceSyncing ? "Syncing..." : "Sync Basic Metadata"}
+          </button>
+          <button
+            className="btn"
+            onClick={() => handleHuggingfaceSync("detailed")}
+            disabled={!selectedModel || huggingfaceSyncing}
+          >
+            Include Detailed
+          </button>
+          <button
+            className="btn"
+            onClick={() => handleHuggingfaceSync("extensive")}
+            disabled={!selectedModel || huggingfaceSyncing}
+          >
+            Include Extensive
+          </button>
+        </div>
         {offlineSyncMessage && (
           <p className="muted" style={{ marginTop: 8 }}>
             {offlineSyncMessage}
+          </p>
+        )}
+        {huggingfaceSyncMessage && (
+          <p className="muted" style={{ marginTop: 8 }}>
+            {huggingfaceSyncMessage}
           </p>
         )}
         <p className="muted" style={{ marginTop: 12 }}>
@@ -1345,6 +1542,163 @@ export default function Dashboard({
       <section className="card">
         <h2>Models Staged for Testing</h2>
         {renderLocalCopies()}
+      </section>
+    </>
+  );
+
+  const renderMetadataTab = () => (
+    <>
+      <section className="card">
+        <h2>Metadata Controls</h2>
+        <p className="muted">
+          Toggle inclusion flags per element type to control what gets stored for
+          each HuggingFace model card.
+        </p>
+        <div className="grid grid-3">
+          <div>
+            <p className="muted">Total elements</p>
+            <p>{metadataStats.total}</p>
+          </div>
+          <div>
+            <p className="muted">Active</p>
+            <p>{metadataStats.active}</p>
+          </div>
+          <div>
+            <p className="muted">Detailed</p>
+            <p>{metadataStats.detailed}</p>
+          </div>
+          <div>
+            <p className="muted">Extensive</p>
+            <p>{metadataStats.extensive}</p>
+          </div>
+        </div>
+        <div className="form-group" style={{ marginTop: 12 }}>
+          <label htmlFor="meta-filter">Filter catalog</label>
+          <input
+            id="meta-filter"
+            placeholder="Search by path, category, or semantic role..."
+            value={metadataFilter}
+            onChange={(event) => setMetadataFilter(event.target.value)}
+          />
+        </div>
+        <button className="btn" onClick={refreshMetadata} disabled={metaRefreshing}>
+          {metaRefreshing ? "Refreshing..." : "Refresh Catalog"}
+        </button>
+        {metaMessage && (
+          <p className="muted" style={{ marginTop: 8 }}>
+            {metaMessage}
+          </p>
+        )}
+      </section>
+      <section className="card">
+        <h2>Element Catalog</h2>
+        {filteredMetadata.length === 0 ? (
+          <p className="muted">No metadata entries match the current filter.</p>
+        ) : (
+          <div className="grid grid-2">
+            {filteredMetadata.map((entry) => {
+              const busy = Boolean(metaUpdating[entry.id]);
+              return (
+                <div
+                  key={entry.id}
+                  style={{
+                    border: "1px solid rgba(255,255,255,0.08)",
+                    borderRadius: 8,
+                    padding: 12,
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      gap: 8,
+                      flexWrap: "wrap",
+                    }}
+                  >
+                    <strong style={{ wordBreak: "break-all" }}>
+                      {entry.canonical_path}
+                    </strong>
+                    <span className="muted">{entry.element_type}</span>
+                  </div>
+                  <p className="muted" style={{ marginTop: 4 }}>
+                    {entry.category ?? "Uncategorized"} ·{" "}
+                    {entry.semantic_role ?? "No semantic role"}
+                  </p>
+                  {entry.example_value && (
+                    <pre
+                      style={{
+                        fontSize: 12,
+                        background: "rgba(255,255,255,0.03)",
+                        padding: 8,
+                        borderRadius: 4,
+                        maxHeight: 120,
+                        overflow: "auto",
+                      }}
+                    >
+                      {entry.example_value}
+                    </pre>
+                  )}
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: 8,
+                      flexWrap: "wrap",
+                      marginTop: 8,
+                    }}
+                  >
+                    <button
+                      className="btn"
+                      style={{
+                        background: entry.active === 1 ? "#16a34a" : "transparent",
+                        borderColor:
+                          entry.active === 1
+                            ? "rgba(0,0,0,0)"
+                            : "rgba(255,255,255,0.2)",
+                        opacity: busy ? 0.6 : 1,
+                      }}
+                      disabled={busy}
+                      onClick={() => toggleMetaFlag(entry, "active")}
+                    >
+                      {entry.active === 1 ? "Active" : "Inactive"}
+                    </button>
+                    <button
+                      className="btn"
+                      style={{
+                        background: entry.detailed === 1 ? "#0ea5e9" : "transparent",
+                        borderColor:
+                          entry.detailed === 1
+                            ? "rgba(0,0,0,0)"
+                            : "rgba(255,255,255,0.2)",
+                        opacity: busy ? 0.6 : 1,
+                      }}
+                      disabled={busy}
+                      onClick={() => toggleMetaFlag(entry, "detailed")}
+                    >
+                      {entry.detailed === 1 ? "Detailed" : "Basic"}
+                    </button>
+                    <button
+                      className="btn"
+                      style={{
+                        background:
+                          entry.extensive === 1 ? "#a855f7" : "transparent",
+                        borderColor:
+                          entry.extensive === 1
+                            ? "rgba(0,0,0,0)"
+                            : "rgba(255,255,255,0.2)",
+                        opacity: busy ? 0.6 : 1,
+                      }}
+                      disabled={busy}
+                      onClick={() => toggleMetaFlag(entry, "extensive")}
+                    >
+                      {entry.extensive === 1 ? "Extensive" : "Standard"}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </section>
     </>
   );
@@ -2511,6 +2865,8 @@ export default function Dashboard({
     switch (activeTab) {
       case "registry":
         return renderRegistryTab();
+      case "metadata":
+        return renderMetadataTab();
       case "runner":
         return renderRunnerTab();
       case "config":

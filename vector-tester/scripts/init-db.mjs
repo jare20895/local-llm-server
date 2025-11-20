@@ -35,6 +35,29 @@ CREATE TABLE IF NOT EXISTS models_test (
   cached_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS model_parameters (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  description TEXT,
+  data_type TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT,
+  unit TEXT,
+  default_value TEXT
+);
+
+CREATE TABLE IF NOT EXISTS model_parameter_values (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  model_test_id INTEGER NOT NULL,
+  parameter_id INTEGER NOT NULL,
+  value TEXT,
+  json_value TEXT,
+  notes TEXT,
+  recorded_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (model_test_id) REFERENCES models_test(id) ON DELETE CASCADE,
+  FOREIGN KEY (parameter_id) REFERENCES model_parameters(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS server_environments (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL UNIQUE,
@@ -96,6 +119,44 @@ CREATE TABLE IF NOT EXISTS log_events (
   FOREIGN KEY (model_id) REFERENCES models_test(id) ON DELETE SET NULL,
   FOREIGN KEY (test_profile_id) REFERENCES test_profiles(id) ON DELETE SET NULL
 );
+
+CREATE TABLE IF NOT EXISTS huggingface_meta (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  canonical_path TEXT NOT NULL UNIQUE,
+  display_path TEXT,
+  element_type TEXT NOT NULL,
+  description TEXT,
+  category TEXT,
+  semantic_role TEXT,
+  example_value TEXT,
+  active INTEGER NOT NULL DEFAULT 1,
+  detailed INTEGER NOT NULL DEFAULT 0,
+  extensive INTEGER NOT NULL DEFAULT 0,
+  parent_path TEXT,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS models_test_huggingface (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  model_test_id INTEGER NOT NULL,
+  meta_id INTEGER NOT NULL,
+  canonical_path TEXT NOT NULL,
+  display_path TEXT,
+  element_type TEXT NOT NULL,
+  value_text TEXT,
+  value_json TEXT,
+  model_card_path TEXT,
+  model_card_section TEXT,
+  source_line INTEGER,
+  detected_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (model_test_id) REFERENCES models_test(id) ON DELETE CASCADE,
+  FOREIGN KEY (meta_id) REFERENCES huggingface_meta(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_models_test_hf_model
+  ON models_test_huggingface(model_test_id);
+CREATE INDEX IF NOT EXISTS idx_models_test_hf_meta
+  ON models_test_huggingface(meta_id);
 
 CREATE TABLE IF NOT EXISTS swagger_endpoints (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

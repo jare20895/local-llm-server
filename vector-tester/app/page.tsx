@@ -15,6 +15,7 @@ export default async function Page() {
       initialProfiles={data.profiles}
       initialSwagger={data.swagger}
       initialStepCount={data.stepCount}
+      initialMetadata={data.metadata}
     />
   );
 }

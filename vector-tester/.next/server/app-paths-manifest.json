@@ -1,0 +1,6 @@
+{
+  "/api/llm/status/route": "app/api/llm/status/route.js",
+  "/api/log-events/route": "app/api/log-events/route.js",
+  "/api/huggingface/meta/route": "app/api/huggingface/meta/route.js",
+  "/page": "app/page.js"
+}
