@@ -151,6 +151,23 @@ The scraper automatically forces critical compatibility/performance items (licen
 
 > Requirements: ensure `python3` plus the `huggingface-hub` and `PyYAML` packages are installed on the machine/container running Vector-Tester (the Docker images now bake these in automatically).
 
+### HuggingFace Config Defaults
+
+Vector-Tester can also snapshot `config.json` and `generation_config.json` from HuggingFace so each staged model keeps a historical record of its default runtime knobs:
+
+- `model_config_files` stores the raw JSON blob, SHA hash, and timestamps per `config_type`.
+- `model_config_entries` flattens each JSON key path (e.g. `rope_scaling.type`, `attn_config.flash_attention`) and links it back to existing `model_parameters` when the names match so overrides can be compared to defaults.
+
+Trigger a capture from the **Stage Test** card using the new config buttons or manually call the API:
+
+```bash
+curl -X POST http://localhost:4173/api/models/huggingface/config \
+  -H "Content-Type: application/json" \
+  -d '{"model_name":"qwen-3b","config_types":["config","generation"]}'
+```
+
+Behind the scenes this runs `vector-tester/scripts/sync_hf_configs.py`, which downloads the JSON files, hashes them, flattens the keys, associates them with any known `model_parameters`, and prunes obsolete paths. View the captured defaults from the “Models Staged for Testing” list via the **View Config Defaults** button, or hit `GET /api/models/configs/{model_test_id}` for automation.
+
 ### Local Development
 
 ```bash

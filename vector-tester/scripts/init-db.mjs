@@ -160,6 +160,40 @@ CREATE INDEX IF NOT EXISTS idx_models_test_hf_model
 CREATE INDEX IF NOT EXISTS idx_models_test_hf_meta
   ON models_test_huggingface(meta_id);
 
+CREATE TABLE IF NOT EXISTS model_config_files (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  model_test_id INTEGER NOT NULL,
+  config_type TEXT NOT NULL,
+  file_name TEXT NOT NULL,
+  source_url TEXT,
+  sha256 TEXT,
+  content TEXT NOT NULL,
+  parsed_at TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (model_test_id) REFERENCES models_test(id) ON DELETE CASCADE,
+  UNIQUE(model_test_id, config_type)
+);
+
+CREATE TABLE IF NOT EXISTS model_config_entries (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  config_file_id INTEGER NOT NULL,
+  parameter_id INTEGER,
+  json_path TEXT NOT NULL,
+  value_text TEXT,
+  value_json TEXT,
+  data_type TEXT,
+  detected_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  notes TEXT,
+  FOREIGN KEY (config_file_id) REFERENCES model_config_files(id) ON DELETE CASCADE,
+  FOREIGN KEY (parameter_id) REFERENCES model_parameters(id) ON DELETE SET NULL,
+  UNIQUE(config_file_id, json_path)
+);
+
+CREATE INDEX IF NOT EXISTS idx_model_config_entries_file
+  ON model_config_entries(config_file_id);
+
 CREATE TABLE IF NOT EXISTS swagger_endpoints (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   method TEXT NOT NULL,

@@ -11,6 +11,10 @@ import type {
   TestStep,
   HuggingfaceMeta,
   ModelHuggingfaceRecord,
+  ModelConfigFile,
+  ModelConfigEntry,
+  ModelConfigTest,
+  ModelConfigTestEntry,
 } from "@/lib/db";
 import type { LlmStatus, ModelSummary } from "@/lib/llm";
 
@@ -49,6 +53,14 @@ const INTERNAL_CATEGORY_SET = new Set([
 ]);
 
 const JSON_HINTS = ["inference", "parameter", "config", "widget"];
+type CatalogEntry = HuggingfaceMeta & {
+  truncatedExample: string;
+  hasOverflow: boolean;
+};
+
+type ConfigTestWithEntries = ModelConfigTest & {
+  entries: ModelConfigTestEntry[];
+};
 type CatalogEntry = HuggingfaceMeta & {
   truncatedExample: string;
   hasOverflow: boolean;
@@ -117,6 +129,34 @@ export default function Dashboard({
   const [metadataModal, setMetadataModal] = useState<{
     entry: HuggingfaceMeta;
   } | null>(null);
+  const [configSyncMessage, setConfigSyncMessage] = useState<string | null>(null);
+  const [configSyncing, setConfigSyncing] = useState(false);
+  const [configDefaultsModal, setConfigDefaultsModal] = useState<{
+    copy: TestModelCopy;
+    files: Array<ModelConfigFile & { entries: ModelConfigEntry[] }>;
+  } | null>(null);
+  const [configLoadingId, setConfigLoadingId] = useState<number | null>(null);
+  const [configTests, setConfigTests] = useState<
+    Record<number, ConfigTestWithEntries[]>
+  >({});
+  const [configTestsLoadingId, setConfigTestsLoadingId] = useState<number | null>(null);
+  const [configTestsMessage, setConfigTestsMessage] = useState<string | null>(null);
+  const [configTestModal, setConfigTestModal] = useState<{
+    modelId: number;
+    test: ConfigTestWithEntries;
+  } | null>(null);
+  const [configTestForm, setConfigTestForm] = useState({
+    name: "",
+    description: "",
+    config_type: "config" as "config" | "generation",
+  });
+  const [configEntryDrafts, setConfigEntryDrafts] = useState<
+    Record<number, string>
+  >({});
+  const [newConfigEntry, setNewConfigEntry] = useState({
+    json_path: "",
+    value: "",
+  });
   type MetaFlag = keyof Pick<
     HuggingfaceMeta,
     "active" | "detailed" | "extensive"
@@ -340,6 +380,18 @@ export default function Dashboard({
     [localCopies, form.model_name]
   );
   const activeTestModelId = activeTestModel?.id ?? null;
+  const selectedStagedModel = useMemo(
+    () => localCopies.find((copy) => copy.model_name === selectedModel) ?? null,
+    [localCopies, selectedModel]
+  );
+  const selectedStagedModelId = selectedStagedModel?.id ?? null;
+  const configTestsForSelected = useMemo(
+    () =>
+      selectedStagedModelId
+        ? configTests[selectedStagedModelId] ?? []
+        : [],
+    [selectedStagedModelId, configTests]
+  );
 
   const summarizeStatus = useMemo(() => {
     if (!status) {
@@ -370,6 +422,44 @@ export default function Dashboard({
       setRuns(data.runs);
     }
   }, []);
+
+  const fetchConfigTests = useCallback(async (modelId: number) => {
+    setConfigTestsLoadingId(modelId);
+    setConfigTestsMessage(null);
+    try {
+      const res = await fetch(`/api/models/config-tests/${modelId}`);
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to load config tests");
+      }
+      setConfigTests((prev) => ({
+        ...prev,
+        [modelId]: data.tests ?? [],
+      }));
+      if ((data.tests ?? []).length === 0) {
+        setConfigTestsMessage("No config tests defined yet.");
+      }
+    } catch (error) {
+      setConfigTestsMessage(
+        `Config tests error: ${(error as Error).message}`
+      );
+    } finally {
+      setConfigTestsLoadingId(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (configTestModal) {
+      const drafts: Record<number, string> = {};
+      configTestModal.test.entries.forEach((entry) => {
+        drafts[entry.id] = entry.value_text ?? entry.value_json ?? "";
+      });
+      setConfigEntryDrafts(drafts);
+      setNewConfigEntry({ json_path: "", value: "" });
+    } else {
+      setConfigEntryDrafts({});
+    }
+  }, [configTestModal]);
 
   const refreshLogs = useCallback(async () => {
     const res = await fetch("/api/log-events");
@@ -671,6 +761,187 @@ export default function Dashboard({
     }
   };
 
+  const handleShowConfigDefaults = async (copy: TestModelCopy) => {
+    setConfigLoadingId(copy.id);
+    setConfigSyncMessage(null);
+    try {
+      const res = await fetch(`/api/models/configs/${copy.id}`);
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to load configs");
+      }
+      setConfigDefaultsModal({
+        copy,
+        files: (data.files as Array<ModelConfigFile & { entries: ModelConfigEntry[] }>) ?? [],
+      });
+    } catch (error) {
+      setConfigSyncMessage(
+        `Config load failed: ${(error as Error).message}`
+      );
+    } finally {
+      setConfigLoadingId(null);
+    }
+  };
+
+  const updateConfigTestsState = (
+    modelId: number,
+    updater: (tests: ConfigTestWithEntries[]) => ConfigTestWithEntries[]
+  ) => {
+    setConfigTests((prev) => {
+      const nextList = updater(prev[modelId] ?? []);
+      if (configTestModal?.modelId === modelId) {
+        const updatedTest = nextList.find(
+          (test) => test.id === configTestModal.test.id
+        );
+        if (updatedTest) {
+          setConfigTestModal({ modelId, test: updatedTest });
+        }
+      }
+      return {
+        ...prev,
+        [modelId]: nextList,
+      };
+    });
+  };
+
+  const handleToggleConfigEntryDefault = async (
+    modelId: number,
+    entryId: number,
+    inherit: boolean
+  ) => {
+    try {
+      const res = await fetch("/api/models/config-tests/entry", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: entryId,
+          inherit_default: inherit,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to update entry");
+      }
+      updateConfigTestsState(modelId, (tests) =>
+        tests.map((test) => ({
+          ...test,
+          entries: test.entries.map((entry) =>
+            entry.id === entryId ? data.entry : entry
+          ),
+        }))
+      );
+    } catch (error) {
+      setConfigTestsMessage(
+        `Entry update failed: ${(error as Error).message}`
+      );
+    }
+  };
+
+  const handleSaveConfigEntry = async (
+    modelId: number,
+    entryId: number,
+    value: string
+  ) => {
+    try {
+      const res = await fetch("/api/models/config-tests/entry", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: entryId,
+          value_text: value,
+          value_json: null,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to save entry");
+      }
+      updateConfigTestsState(modelId, (tests) =>
+        tests.map((test) => ({
+          ...test,
+          entries: test.entries.map((entry) =>
+            entry.id === entryId ? data.entry : entry
+          ),
+        }))
+      );
+      setConfigEntryDrafts((prev) => ({ ...prev, [entryId]: value }));
+    } catch (error) {
+      setConfigTestsMessage(
+        `Entry save failed: ${(error as Error).message}`
+      );
+    }
+  };
+
+  const handleAddConfigEntry = async (modelId: number, testId: number) => {
+    if (!newConfigEntry.json_path) {
+      setConfigTestsMessage("JSON path is required.");
+      return;
+    }
+    try {
+      const res = await fetch("/api/models/config-tests/entry", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          config_test_id: testId,
+          json_path: newConfigEntry.json_path,
+          value_text: newConfigEntry.value,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to add entry");
+      }
+      updateConfigTestsState(modelId, (tests) =>
+        tests.map((test) =>
+          test.id === testId
+            ? { ...test, entries: [...test.entries, data.entry] }
+            : test
+        )
+      );
+      setNewConfigEntry({ json_path: "", value: "" });
+    } catch (error) {
+      setConfigTestsMessage(
+        `Add entry failed: ${(error as Error).message}`
+      );
+    }
+  };
+
+  const openConfigTestModal = (modelId: number, testId: number) => {
+    const testList = configTests[modelId] ?? [];
+    const found = testList.find((test) => test.id === testId);
+    if (found) {
+      setConfigTestModal({ modelId, test: found });
+    }
+  };
+
+  const handleUpdateConfigTestMeta = async (
+    testId: number,
+    payload: Partial<ModelConfigTest>
+  ) => {
+    try {
+      const res = await fetch("/api/models/config-tests/test", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: testId,
+          ...payload,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to update config test");
+      }
+      updateConfigTestsState(data.test.model_test_id, (tests) =>
+        tests.map((test) => (test.id === testId ? { ...test, ...data.test } : test))
+      );
+      setConfigTestsMessage("Config test updated.");
+    } catch (error) {
+      setConfigTestsMessage(
+        `Config test update failed: ${(error as Error).message}`
+      );
+    }
+  };
+
   const refreshMetadata = useCallback(async () => {
     setMetaRefreshing(true);
     try {
@@ -739,6 +1010,103 @@ export default function Dashboard({
         return updated;
       });
     }
+  };
+
+  const handleConfigSync = async (types: ("config" | "generation")[]) => {
+    if (!selectedModel) return;
+    setConfigSyncing(true);
+    setConfigSyncMessage("Starting config sync...");
+    try {
+      const res = await fetch("/api/models/huggingface/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model_name: selectedModel,
+          config_types: types,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to sync configs");
+      }
+      const result = data.result;
+      if (result?.results) {
+        const details = (result.results as any[])
+          .map(
+            (item) =>
+              `${item.config_type}: +${item.entries_created}/~${item.entries_updated}`
+          )
+          .join(", ");
+        setConfigSyncMessage(
+          `Config sync complete for ${selectedModel} (${details}).`
+        );
+      } else {
+        setConfigSyncMessage("Config sync complete.");
+      }
+    } catch (error) {
+      setConfigSyncMessage(
+        `Config sync failed: ${(error as Error).message}`
+      );
+    } finally {
+      setConfigSyncing(false);
+    }
+  };
+
+  const handleCreateConfigTest = async (opts: {
+    model_test_id: number;
+    config_type: "config" | "generation";
+    name: string;
+    description?: string;
+  }) => {
+    try {
+      const res = await fetch("/api/models/config-tests", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(opts),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to create config test");
+      }
+      setConfigTests((prev) => {
+        const list = prev[opts.model_test_id] ?? [];
+        return {
+          ...prev,
+          [opts.model_test_id]: [data.test, ...list],
+        };
+      });
+      await fetchConfigTests(opts.model_test_id);
+      setConfigTestsMessage(`Created config test '${opts.name}'.`);
+    } catch (error) {
+      setConfigTestsMessage(
+        `Create config test failed: ${(error as Error).message}`
+      );
+    }
+  };
+
+  const handleConfigTestFormSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!selectedStagedModelId) {
+      setConfigTestsMessage("Select a staged model first.");
+      return;
+    }
+    const existingCount = configTestsForSelected.length;
+    const autoName = `CFG${String(existingCount + 1).padStart(3, "0")} ${
+      selectedModel || ""
+    }`.trim();
+    const name = configTestForm.name.trim() || autoName;
+    await handleCreateConfigTest({
+      model_test_id: selectedStagedModelId,
+      config_type: configTestForm.config_type,
+      name,
+      description: configTestForm.description,
+    });
+    setConfigTestForm({
+      name: "",
+      description: "",
+      config_type: configTestForm.config_type,
+    });
+    fetchConfigTests(selectedStagedModelId);
   };
 
   const updateRunnerMessage = (key: keyof typeof runnerMessages, value: string) =>
@@ -1632,6 +2000,14 @@ export default function Dashboard({
           >
             {stagedMetadataLoadingId === copy.id ? "Loading..." : "View Metadata"}
           </button>
+          <button
+            className="btn"
+            style={{ marginTop: 6, marginLeft: 8 }}
+            onClick={() => handleShowConfigDefaults(copy)}
+            disabled={configLoadingId === copy.id}
+          >
+            {configLoadingId === copy.id ? "Loading..." : "View Config Defaults"}
+          </button>
         </div>
       ))}
       {stagedMetadataError && (
@@ -1698,6 +2074,36 @@ export default function Dashboard({
             Include Extensive
           </button>
         </div>
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            flexWrap: "wrap",
+            marginTop: 8,
+          }}
+        >
+          <button
+            className="btn"
+            onClick={() => handleConfigSync(["config"])}
+            disabled={!selectedModel || configSyncing}
+          >
+            {configSyncing ? "Syncing..." : "Sync config.json"}
+          </button>
+          <button
+            className="btn"
+            onClick={() => handleConfigSync(["generation"])}
+            disabled={!selectedModel || configSyncing}
+          >
+            Sync generation_config
+          </button>
+          <button
+            className="btn"
+            onClick={() => handleConfigSync(["config", "generation"])}
+            disabled={!selectedModel || configSyncing}
+          >
+            Sync All Configs
+          </button>
+        </div>
         {offlineSyncMessage && (
           <p className="muted" style={{ marginTop: 8 }}>
             {offlineSyncMessage}
@@ -1708,6 +2114,11 @@ export default function Dashboard({
             {huggingfaceSyncMessage}
           </p>
         )}
+        {configSyncMessage && (
+          <p className="muted" style={{ marginTop: 8 }}>
+            {configSyncMessage}
+          </p>
+        )}
         <p className="muted" style={{ marginTop: 12 }}>
           Requesting an offline copy stores the current registry record inside Vector-Tester&apos;s
           database so testing can proceed even if the primary API goes offline.
@@ -1716,6 +2127,128 @@ export default function Dashboard({
       <section className="card">
         <h2>Models Staged for Testing</h2>
         {renderLocalCopies()}
+      </section>
+      <section className="card">
+        <h2>Configuration Builder</h2>
+        {!selectedStagedModelId ? (
+          <p className="muted">
+            Select a staged model above to build test configurations.
+          </p>
+        ) : (
+          <>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button
+                className="btn"
+                onClick={() => fetchConfigTests(selectedStagedModelId)}
+                disabled={configTestsLoadingId === selectedStagedModelId}
+              >
+                {configTestsLoadingId === selectedStagedModelId
+                  ? "Loading..."
+                  : "Load Config Tests"}
+              </button>
+            </div>
+            <form
+              onSubmit={handleConfigTestFormSubmit}
+              style={{
+                marginTop: 12,
+                display: "flex",
+                gap: 8,
+                flexWrap: "wrap",
+              }}
+            >
+              <input
+                placeholder="Config name"
+                value={configTestForm.name}
+                onChange={(e) =>
+                  setConfigTestForm((prev) => ({
+                    ...prev,
+                    name: e.target.value,
+                  }))
+                }
+                style={{ flex: "1 1 200px" }}
+              />
+              <select
+                value={configTestForm.config_type}
+                onChange={(e) =>
+                  setConfigTestForm((prev) => ({
+                    ...prev,
+                    config_type: e.target.value as "config" | "generation",
+                  }))
+                }
+              >
+                <option value="config">config.json</option>
+                <option value="generation">generation_config.json</option>
+              </select>
+              <input
+                placeholder="Description"
+                value={configTestForm.description}
+                onChange={(e) =>
+                  setConfigTestForm((prev) => ({
+                    ...prev,
+                    description: e.target.value,
+                  }))
+                }
+                style={{ flex: "2 1 200px" }}
+              />
+              <button className="btn" type="submit">
+                New Config Test
+              </button>
+            </form>
+            {configTestsMessage && (
+              <p className="muted" style={{ marginTop: 8 }}>
+                {configTestsMessage}
+              </p>
+            )}
+            <div style={{ marginTop: 12 }}>
+              {configTestsForSelected.length === 0 ? (
+                <p className="muted">No config tests defined yet.</p>
+              ) : (
+                <ul style={{ listStyle: "none", padding: 0 }}>
+                  {configTestsForSelected.map((test) => (
+                    <li
+                      key={test.id}
+                      style={{
+                        borderBottom: "1px solid rgba(255,255,255,0.05)",
+                        padding: "8px 0",
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          gap: 8,
+                        }}
+                      >
+                        <div>
+                          <strong>{test.name}</strong>{" "}
+                          <span className="muted">
+                            ({test.config_type}) · {test.load_status}
+                          </span>
+                        </div>
+                        <div style={{ display: "flex", gap: 8 }}>
+                          <button
+                            className="btn"
+                            onClick={() =>
+                              openConfigTestModal(selectedStagedModelId, test.id)
+                            }
+                          >
+                            Edit
+                          </button>
+                        </div>
+                      </div>
+                      {test.load_notes && (
+                        <p className="muted" style={{ margin: "4px 0 0" }}>
+                          Notes: {test.load_notes}
+                        </p>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </>
+        )}
       </section>
     </>
   );
@@ -3211,6 +3744,217 @@ export default function Dashboard({
     );
   };
 
+  const renderConfigModal = () => {
+    if (!configDefaultsModal) return null;
+    const { copy, files } = configDefaultsModal;
+    return (
+      <div className="modal-overlay">
+        <div className="modal-content">
+          <h3>Config defaults · {copy.model_name}</h3>
+          {files.length === 0 ? (
+            <p className="muted">No config files captured yet.</p>
+          ) : (
+            files.map((file) => (
+              <section className="card" key={file.id}>
+                <h4 style={{ margin: "0 0 8px" }}>
+                  {file.config_type} ({file.file_name})
+                </h4>
+                <p className="muted" style={{ marginTop: 0, fontSize: 12 }}>
+                  Parsed {new Date(file.parsed_at).toLocaleString()}
+                </p>
+                <div style={{ maxHeight: 240, overflow: "auto" }}>
+                  <table className="table" style={{ fontSize: 12 }}>
+                    <thead>
+                      <tr>
+                        <th>Path</th>
+                        <th>Value</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {file.entries.map((entry) => (
+                        <tr key={entry.id}>
+                          <td>
+                            <strong>{entry.json_path}</strong>
+                            {entry.data_type && (
+                              <p className="muted" style={{ margin: 0 }}>
+                                {entry.data_type}
+                              </p>
+                            )}
+                          </td>
+                          <td>
+                            {entry.value_text ??
+                              entry.value_json ??
+                              "(no value)"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            ))
+          )}
+          <div className="modal-actions">
+            <button className="btn" onClick={() => setConfigDefaultsModal(null)}>
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderConfigTestModal = () => {
+    if (!configTestModal) return null;
+    const { modelId, test } = configTestModal;
+    return (
+      <div className="modal-overlay">
+        <div className="modal-content">
+          <h3>
+            {test.name} ({test.config_type})
+          </h3>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+            <label className="muted">
+              Status:
+              <select
+                value={test.load_status}
+                onChange={(e) =>
+                  handleUpdateConfigTestMeta(test.id, {
+                    load_status: e.target.value,
+                  })
+                }
+                style={{ marginLeft: 8 }}
+              >
+                <option value="pending">Pending</option>
+                <option value="success">Success</option>
+                <option value="failed">Failed</option>
+              </select>
+            </label>
+            <label className="muted" style={{ flex: "1 1 200px" }}>
+              Notes:
+              <input
+                value={test.load_notes ?? ""}
+                onChange={(e) =>
+                  handleUpdateConfigTestMeta(test.id, {
+                    load_notes: e.target.value,
+                  })
+                }
+                style={{ width: "100%", marginTop: 4 }}
+              />
+            </label>
+          </div>
+          <div style={{ maxHeight: 360, overflow: "auto", marginTop: 12 }}>
+            <table className="table" style={{ fontSize: 12 }}>
+              <thead>
+                <tr>
+                  <th>Include</th>
+                  <th>Path</th>
+                  <th>Value</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {test.entries.map((entry) => (
+                  <tr key={entry.id}>
+                    <td>
+                      <input
+                        type="checkbox"
+                        checked={entry.inherit_default === 1}
+                        onChange={(e) =>
+                          handleToggleConfigEntryDefault(
+                            modelId,
+                            entry.id,
+                            e.target.checked
+                          )
+                        }
+                      />
+                    </td>
+                    <td>
+                      <strong>{entry.json_path}</strong>
+                      {entry.data_type && (
+                        <p className="muted" style={{ margin: 0 }}>
+                          {entry.data_type}
+                        </p>
+                      )}
+                    </td>
+                    <td>
+                      <input
+                        disabled={entry.inherit_default === 1}
+                        value={configEntryDrafts[entry.id] ?? ""}
+                        onChange={(e) =>
+                          setConfigEntryDrafts((prev) => ({
+                            ...prev,
+                            [entry.id]: e.target.value,
+                          }))
+                        }
+                        style={{ width: "100%" }}
+                      />
+                    </td>
+                    <td>
+                      <button
+                        className="btn"
+                        disabled={entry.inherit_default === 1}
+                        onClick={() =>
+                          handleSaveConfigEntry(
+                            modelId,
+                            entry.id,
+                            configEntryDrafts[entry.id] ?? ""
+                          )
+                        }
+                      >
+                        Save
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ marginTop: 12 }}>
+            <h4>Add Custom Entry</h4>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <input
+                placeholder="json.path"
+                value={newConfigEntry.json_path}
+                onChange={(e) =>
+                  setNewConfigEntry((prev) => ({
+                    ...prev,
+                    json_path: e.target.value,
+                  }))
+                }
+                style={{ flex: "2 1 200px" }}
+              />
+              <input
+                placeholder="Value"
+                value={newConfigEntry.value}
+                onChange={(e) =>
+                  setNewConfigEntry((prev) => ({
+                    ...prev,
+                    value: e.target.value,
+                  }))
+                }
+                style={{ flex: "2 1 200px" }}
+              />
+              <button
+                className="btn"
+                onClick={() =>
+                  handleAddConfigEntry(modelId, test.id)
+                }
+              >
+                Add
+              </button>
+            </div>
+          </div>
+          <div className="modal-actions">
+            <button className="btn" onClick={() => setConfigTestModal(null)}>
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
 
   const renderTabContent = () => {
     switch (activeTab) {
@@ -3292,6 +4036,8 @@ export default function Dashboard({
       {renderMetadataModal()}
       {renderModelInfoModal()}
       {renderStagedMetadataModal()}
+      {renderConfigModal()}
+      {renderConfigTestModal()}
     </div>
   );
 }

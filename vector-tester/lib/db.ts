@@ -162,6 +162,76 @@ CREATE INDEX IF NOT EXISTS idx_models_test_hf_model
 CREATE INDEX IF NOT EXISTS idx_models_test_hf_meta
   ON models_test_huggingface(meta_id);
 
+CREATE TABLE IF NOT EXISTS model_config_files (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  model_test_id INTEGER NOT NULL,
+  config_type TEXT NOT NULL,
+  file_name TEXT NOT NULL,
+  source_url TEXT,
+  sha256 TEXT,
+  content TEXT NOT NULL,
+  parsed_at TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (model_test_id) REFERENCES models_test(id) ON DELETE CASCADE,
+  UNIQUE(model_test_id, config_type)
+);
+
+CREATE TABLE IF NOT EXISTS model_config_entries (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  config_file_id INTEGER NOT NULL,
+  parameter_id INTEGER,
+  json_path TEXT NOT NULL,
+  value_text TEXT,
+  value_json TEXT,
+  data_type TEXT,
+  detected_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  notes TEXT,
+  FOREIGN KEY (config_file_id) REFERENCES model_config_files(id) ON DELETE CASCADE,
+  FOREIGN KEY (parameter_id) REFERENCES model_parameters(id) ON DELETE SET NULL,
+  UNIQUE(config_file_id, json_path)
+);
+
+CREATE INDEX IF NOT EXISTS idx_model_config_entries_file
+  ON model_config_entries(config_file_id);
+
+CREATE TABLE IF NOT EXISTS model_config_tests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  model_test_id INTEGER NOT NULL,
+  base_config_file_id INTEGER NOT NULL,
+  config_type TEXT NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT,
+  load_status TEXT NOT NULL DEFAULT 'pending',
+  load_notes TEXT,
+  last_tested_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (model_test_id) REFERENCES models_test(id) ON DELETE CASCADE,
+  FOREIGN KEY (base_config_file_id) REFERENCES model_config_files(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS model_config_test_entries (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  config_test_id INTEGER NOT NULL,
+  json_path TEXT NOT NULL,
+  inherit_default INTEGER NOT NULL DEFAULT 1,
+  value_text TEXT,
+  value_json TEXT,
+  data_type TEXT,
+  notes TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (config_test_id) REFERENCES model_config_tests(id) ON DELETE CASCADE,
+  UNIQUE(config_test_id, json_path)
+);
+
+CREATE INDEX IF NOT EXISTS idx_model_config_tests_model
+  ON model_config_tests(model_test_id);
+CREATE INDEX IF NOT EXISTS idx_model_config_test_entries_test
+  ON model_config_test_entries(config_test_id);
+
 CREATE TABLE IF NOT EXISTS swagger_endpoints (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   method TEXT NOT NULL,
@@ -269,6 +339,59 @@ export type ModelHuggingfaceRecord = ModelHuggingfaceElement & {
   active: number;
   detailed: number;
   extensive: number;
+};
+
+export type ModelConfigFile = {
+  id: number;
+  model_test_id: number;
+  config_type: string;
+  file_name: string;
+  source_url: string | null;
+  sha256: string | null;
+  content: string;
+  parsed_at: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ModelConfigEntry = {
+  id: number;
+  config_file_id: number;
+  parameter_id: number | null;
+  json_path: string;
+  value_text: string | null;
+  value_json: string | null;
+  data_type: string | null;
+  detected_at: string;
+  updated_at: string;
+  notes: string | null;
+};
+
+export type ModelConfigTest = {
+  id: number;
+  model_test_id: number;
+  base_config_file_id: number;
+  config_type: string;
+  name: string;
+  description: string | null;
+  load_status: string;
+  load_notes: string | null;
+  last_tested_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ModelConfigTestEntry = {
+  id: number;
+  config_test_id: number;
+  json_path: string;
+  inherit_default: number;
+  value_text: string | null;
+  value_json: string | null;
+  data_type: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 export type TestModelCopy = {
@@ -593,6 +716,207 @@ export function deleteHuggingfaceMetadataForModel(model_test_id: number) {
     `DELETE FROM models_test_huggingface WHERE model_test_id = ?`
   );
   stmt.run(model_test_id);
+}
+
+export function getConfigFilesForModel(
+  model_test_id: number
+): ModelConfigFile[] {
+  const stmt = db.prepare(
+    `SELECT * FROM model_config_files WHERE model_test_id = ? ORDER BY config_type`
+  );
+  return stmt.all(model_test_id) as ModelConfigFile[];
+}
+
+export function getConfigEntriesForFile(
+  config_file_id: number
+): ModelConfigEntry[] {
+  const stmt = db.prepare(
+    `SELECT * FROM model_config_entries
+     WHERE config_file_id = ?
+     ORDER BY json_path`
+  );
+  return stmt.all(config_file_id) as ModelConfigEntry[];
+}
+
+export function createModelConfigTest(data: {
+  model_test_id: number;
+  config_type: string;
+  name: string;
+  description?: string | null;
+}): ModelConfigTest {
+  const configFile = db
+    .prepare(
+      `SELECT * FROM model_config_files
+       WHERE model_test_id = ? AND config_type = ?`
+    )
+    .get(data.model_test_id, data.config_type);
+  if (!configFile) {
+    throw new Error(
+      `No ${data.config_type} config captured for model ${data.model_test_id}`
+    );
+  }
+  const stmt = db.prepare(
+    `INSERT INTO model_config_tests
+      (model_test_id, base_config_file_id, config_type, name, description)
+     VALUES (@model_test_id, @base_config_file_id, @config_type, @name, @description)`
+  );
+  const info = stmt.run({
+    model_test_id: data.model_test_id,
+    base_config_file_id: (configFile as ModelConfigFile).id,
+    config_type: data.config_type,
+    name: data.name,
+    description: data.description ?? null,
+  });
+  const newTest = getConfigTestById(Number(info.lastInsertRowid));
+  const entries = getConfigEntriesForFile((configFile as ModelConfigFile).id);
+  const insertEntry = db.prepare(
+    `INSERT INTO model_config_test_entries
+      (config_test_id, json_path, value_text, value_json, data_type, notes)
+     VALUES (@config_test_id, @json_path, @value_text, @value_json, @data_type, NULL)`
+  );
+  const transaction = db.transaction(() => {
+    for (const entry of entries) {
+      insertEntry.run({
+        config_test_id: newTest.id,
+        json_path: entry.json_path,
+        value_text: entry.value_text,
+        value_json: entry.value_json,
+        data_type: entry.data_type,
+      });
+    }
+  });
+  transaction();
+  return newTest;
+}
+
+export function getConfigTestsForModel(
+  model_test_id: number
+): ModelConfigTest[] {
+  const stmt = db.prepare(
+    `SELECT * FROM model_config_tests
+     WHERE model_test_id = ?
+     ORDER BY datetime(created_at) DESC`
+  );
+  return stmt.all(model_test_id) as ModelConfigTest[];
+}
+
+export function getConfigTestById(id: number): ModelConfigTest {
+  const stmt = db.prepare(`SELECT * FROM model_config_tests WHERE id = ?`);
+  return stmt.get(id) as ModelConfigTest;
+}
+
+export function getConfigTestEntries(
+  config_test_id: number
+): ModelConfigTestEntry[] {
+  const stmt = db.prepare(
+    `SELECT * FROM model_config_test_entries
+     WHERE config_test_id = ?
+     ORDER BY json_path`
+  );
+  return stmt.all(config_test_id) as ModelConfigTestEntry[];
+}
+
+export function updateConfigTestEntry(data: {
+  id: number;
+  inherit_default?: boolean;
+  value_text?: string | null;
+  value_json?: string | null;
+  notes?: string | null;
+}): ModelConfigTestEntry {
+  const stmt = db.prepare(
+    `UPDATE model_config_test_entries
+     SET inherit_default = COALESCE(@inherit_default, inherit_default),
+         value_text = @value_text,
+         value_json = @value_json,
+         notes = @notes,
+         updated_at = datetime('now')
+     WHERE id = @id`
+  );
+  stmt.run({
+    id: data.id,
+    inherit_default:
+      data.inherit_default === undefined
+        ? undefined
+        : data.inherit_default
+        ? 1
+        : 0,
+    value_text:
+      data.value_text === undefined ? undefined : data.value_text ?? null,
+    value_json:
+      data.value_json === undefined ? undefined : data.value_json ?? null,
+    notes: data.notes ?? null,
+  });
+  const row = db
+    .prepare(`SELECT * FROM model_config_test_entries WHERE id = ?`)
+    .get(data.id);
+  return row as ModelConfigTestEntry;
+}
+
+export function addConfigTestEntry(data: {
+  config_test_id: number;
+  json_path: string;
+  value_text?: string | null;
+  value_json?: string | null;
+  data_type?: string | null;
+  notes?: string | null;
+}): ModelConfigTestEntry {
+  const stmt = db.prepare(
+    `INSERT INTO model_config_test_entries
+      (config_test_id, json_path, inherit_default, value_text, value_json, data_type, notes)
+     VALUES (@config_test_id, @json_path, 0, @value_text, @value_json, @data_type, @notes)`
+  );
+  const info = stmt.run({
+    config_test_id: data.config_test_id,
+    json_path: data.json_path,
+    value_text: data.value_text ?? null,
+    value_json: data.value_json ?? null,
+    data_type: data.data_type ?? null,
+    notes: data.notes ?? null,
+  });
+  return db
+    .prepare(`SELECT * FROM model_config_test_entries WHERE id = ?`)
+    .get(Number(info.lastInsertRowid)) as ModelConfigTestEntry;
+}
+
+export function deleteConfigTestEntry(id: number) {
+  const stmt = db.prepare(
+    `DELETE FROM model_config_test_entries WHERE id = ?`
+  );
+  stmt.run(id);
+}
+
+export function updateConfigTestMeta(data: {
+  id: number;
+  name?: string;
+  description?: string | null;
+  load_status?: string;
+  load_notes?: string | null;
+  last_tested_at?: string | null;
+}): ModelConfigTest {
+  const stmt = db.prepare(
+    `UPDATE model_config_tests
+     SET name = COALESCE(@name, name),
+         description = COALESCE(@description, description),
+         load_status = COALESCE(@load_status, load_status),
+         load_notes = COALESCE(@load_notes, load_notes),
+         last_tested_at = COALESCE(@last_tested_at, last_tested_at),
+         updated_at = datetime('now')
+     WHERE id = @id`
+  );
+  stmt.run({
+    id: data.id,
+    name: data.name,
+    description: data.description ?? null,
+    load_status: data.load_status,
+    load_notes: data.load_notes ?? null,
+    last_tested_at: data.last_tested_at ?? null,
+  });
+  return getConfigTestById(data.id);
+}
+
+export function deleteConfigTest(id: number) {
+  const stmt = db.prepare(`DELETE FROM model_config_tests WHERE id = ?`);
+  stmt.run(id);
 }
 
 export function upsertModelParameter(param: {
