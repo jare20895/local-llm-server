@@ -135,6 +135,10 @@ export default function Dashboard({
     copy: TestModelCopy;
     files: Array<ModelConfigFile & { entries: ModelConfigEntry[] }>;
   } | null>(null);
+  const [configBuilderModal, setConfigBuilderModal] = useState<{
+    model: TestModelCopy;
+    activeTab: "config" | "generation";
+  } | null>(null);
   const [configLoadingId, setConfigLoadingId] = useState<number | null>(null);
   const [configTests, setConfigTests] = useState<
     Record<number, ConfigTestWithEntries[]>
@@ -157,6 +161,9 @@ export default function Dashboard({
     json_path: "",
     value: "",
   });
+  const [configDefaultsCache, setConfigDefaultsCache] = useState<
+    Record<string, Record<string, string>>
+  >({});
   type MetaFlag = keyof Pick<
     HuggingfaceMeta,
     "active" | "detailed" | "extensive"
@@ -432,34 +439,84 @@ export default function Dashboard({
       if (!res.ok) {
         throw new Error(data.error || "Failed to load config tests");
       }
+      const tests = (data.tests as ConfigTestWithEntries[]) ?? [];
       setConfigTests((prev) => ({
         ...prev,
-        [modelId]: data.tests ?? [],
+        [modelId]: tests,
       }));
-      if ((data.tests ?? []).length === 0) {
+      if (tests.length === 0) {
         setConfigTestsMessage("No config tests defined yet.");
       }
+      return tests;
     } catch (error) {
       setConfigTestsMessage(
         `Config tests error: ${(error as Error).message}`
       );
+      return [];
     } finally {
       setConfigTestsLoadingId(null);
     }
   }, []);
 
+  const ensureConfigDefaults = useCallback(
+    async (modelId: number) => {
+      const cacheKeyPrefix = `${modelId}-`;
+      if (
+        Object.keys(configDefaultsCache).some((key) =>
+          key.startsWith(cacheKeyPrefix)
+        )
+      ) {
+        return;
+      }
+      try {
+        const res = await fetch(`/api/models/configs/${modelId}`);
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.error || "Failed to load config defaults");
+        }
+        const nextCache: Record<string, Record<string, string>> = {};
+        for (const file of (data.files as Array<
+          ModelConfigFile & { entries: ModelConfigEntry[] }
+        >) ?? []) {
+          const typeKey = `${modelId}-${file.config_type}`;
+          nextCache[typeKey] = {};
+          for (const entry of file.entries) {
+            const value =
+              entry.value_json ?? entry.value_text ?? "(no default)";
+            nextCache[typeKey][entry.json_path] = value;
+          }
+        }
+        setConfigDefaultsCache((prev) => ({ ...prev, ...nextCache }));
+      } catch (error) {
+        setConfigSyncMessage(
+          `Config defaults failed: ${(error as Error).message}`
+        );
+      }
+    },
+    [configDefaultsCache, setConfigDefaultsCache]
+  );
+
   useEffect(() => {
-    if (configTestModal) {
-      const drafts: Record<number, string> = {};
-      configTestModal.test.entries.forEach((entry) => {
-        drafts[entry.id] = entry.value_text ?? entry.value_json ?? "";
-      });
-      setConfigEntryDrafts(drafts);
-      setNewConfigEntry({ json_path: "", value: "" });
-    } else {
+    if (!configTestModal) {
       setConfigEntryDrafts({});
+      return;
     }
-  }, [configTestModal]);
+    const defaultsKey = `${configTestModal.modelId}-${configTestModal.test.config_type}`;
+    if (!configDefaultsCache[defaultsKey]) {
+      void ensureConfigDefaults(configTestModal.modelId);
+    }
+    const defaultsMap = configDefaultsCache[defaultsKey] ?? {};
+    const drafts: Record<number, string> = {};
+    configTestModal.test.entries.forEach((entry) => {
+      const baseValue =
+        entry.inherit_default === 1
+          ? defaultsMap[entry.json_path] ?? ""
+          : entry.value_text ?? entry.value_json ?? "";
+      drafts[entry.id] = baseValue ?? "";
+    });
+    setConfigEntryDrafts(drafts);
+    setNewConfigEntry({ json_path: "", value: "" });
+  }, [configTestModal, configDefaultsCache, ensureConfigDefaults]);
 
   const refreshLogs = useCallback(async () => {
     const res = await fetch("/api/log-events");
@@ -839,7 +896,7 @@ export default function Dashboard({
 
   const handleSaveConfigEntry = async (
     modelId: number,
-    entryId: number,
+    entry: ModelConfigTestEntry,
     value: string
   ) => {
     try {
@@ -847,7 +904,8 @@ export default function Dashboard({
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          id: entryId,
+          id: entry.id,
+          active: true,
           value_text: value,
           value_json: null,
         }),
@@ -859,12 +917,12 @@ export default function Dashboard({
       updateConfigTestsState(modelId, (tests) =>
         tests.map((test) => ({
           ...test,
-          entries: test.entries.map((entry) =>
-            entry.id === entryId ? data.entry : entry
+          entries: test.entries.map((candidate) =>
+            candidate.id === data.entry.id ? data.entry : candidate
           ),
         }))
       );
-      setConfigEntryDrafts((prev) => ({ ...prev, [entryId]: value }));
+      setConfigEntryDrafts((prev) => ({ ...prev, [entry.id]: value }));
     } catch (error) {
       setConfigTestsMessage(
         `Entry save failed: ${(error as Error).message}`
@@ -912,6 +970,22 @@ export default function Dashboard({
     if (found) {
       setConfigTestModal({ modelId, test: found });
     }
+  };
+
+  const handleRestoreDefault = async (
+    modelId: number,
+    entry: ModelConfigTestEntry,
+    defaultValue: string | undefined
+  ) => {
+    if (!defaultValue) {
+      setConfigTestsMessage("Default value unavailable for this field.");
+      return;
+    }
+    if (entry.inherit_default !== 1) {
+      await handleToggleConfigEntryDefault(modelId, entry.id, true);
+    }
+    await handleSaveConfigEntry(modelId, entry, defaultValue);
+    setConfigEntryDrafts((prev) => ({ ...prev, [entry.id]: defaultValue }));
   };
 
   const handleUpdateConfigTestMeta = async (
@@ -1052,12 +1126,12 @@ export default function Dashboard({
     }
   };
 
-  const handleCreateConfigTest = async (opts: {
-    model_test_id: number;
-    config_type: "config" | "generation";
-    name: string;
-    description?: string;
-  }) => {
+const handleCreateConfigTest = async (opts: {
+  model_test_id: number;
+  config_type: "config" | "generation";
+  name: string;
+  description?: string;
+  }): Promise<ModelConfigTest | null> => {
     try {
       const res = await fetch("/api/models/config-tests", {
         method: "POST",
@@ -1077,17 +1151,55 @@ export default function Dashboard({
       });
       await fetchConfigTests(opts.model_test_id);
       setConfigTestsMessage(`Created config test '${opts.name}'.`);
+      return data.test as ModelConfigTest;
     } catch (error) {
       setConfigTestsMessage(
         `Create config test failed: ${(error as Error).message}`
       );
+      return null;
     }
+  };
+
+  const handleOpenConfigBuilder = async (
+    copy: TestModelCopy,
+    initialTab: "config" | "generation" = "config"
+  ) => {
+    setSelectedModel(copy.model_name);
+    const tests = await fetchConfigTests(copy.id);
+    if (!tests.some((test) => test.config_type === initialTab)) {
+      await handleConfigTestFormSubmit(undefined, copy.id, initialTab, true);
+      await fetchConfigTests(copy.id);
+    }
+    await ensureConfigDefaults(copy.id);
+    setConfigBuilderModal({
+      model: copy,
+      activeTab: initialTab,
+    });
+  };
+
+  const handleQuickConfigTest = async (
+    modelId: number,
+    type: "config" | "generation"
+  ) => {
+    const copy = localCopies.find((item) => item.id === modelId);
+    if (!copy) {
+      setConfigTestsMessage("Staged model not found.");
+      return;
+    }
+    await handleConfigTestFormSubmit(undefined, modelId, type, true);
+    await fetchConfigTests(modelId);
+    await ensureConfigDefaults(modelId);
+    setConfigBuilderModal({
+      model: copy,
+      activeTab: type,
+    });
   };
 
   const handleConfigTestFormSubmit = async (
     event?: React.FormEvent,
     modelIdOverride?: number,
-    configTypeOverride?: "config" | "generation"
+    configTypeOverride?: "config" | "generation",
+    suppressModal?: boolean
   ) => {
     if (event) {
       event.preventDefault();
@@ -1105,7 +1217,7 @@ export default function Dashboard({
     )} ${selectedModel || ""}`.trim();
     const name = configTestForm.name.trim() || autoName;
     const configType = configTypeOverride ?? configTestForm.config_type;
-    await handleCreateConfigTest({
+    const created = await handleCreateConfigTest({
       model_test_id: targetModelId,
       config_type: configType,
       name,
@@ -1119,8 +1231,10 @@ export default function Dashboard({
       });
       fetchConfigTests(targetModelId);
     }
-    setConfigTestsMessage(`Created configuration ${name}`);
-    openConfigTestModal(targetModelId, list.length ? list[0].id : 0);
+    if (created && !suppressModal) {
+      setConfigTestsMessage(`Created configuration ${name}`);
+      openConfigTestModal(targetModelId, created.id);
+    }
   };
 
   const updateRunnerMessage = (key: keyof typeof runnerMessages, value: string) =>
@@ -2036,12 +2150,26 @@ export default function Dashboard({
                   ? "Loading..."
                   : "View Config Defaults"}
               </button>
-              <button
-                className="btn"
-                onClick={() => handleOpenConfigBuilder(copy)}
-              >
-                Config Builder
-              </button>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                <button
+                  className="btn"
+                  onClick={() => handleOpenConfigBuilder(copy, "config")}
+                >
+                  Config Builder
+                </button>
+                <button
+                  className="btn"
+                  onClick={() => handleQuickConfigTest(copy.id, "config")}
+                >
+                  + config.json
+                </button>
+                <button
+                  className="btn"
+                  onClick={() => handleQuickConfigTest(copy.id, "generation")}
+                >
+                  + generation_config
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -3840,9 +3968,102 @@ export default function Dashboard({
     );
   };
 
+  const renderConfigBuilderModal = () => {
+    if (!configBuilderModal) return null;
+    const { model, activeTab } = configBuilderModal;
+    const tests = (configTests[model.id] ?? []).filter(
+      (test) => test.config_type === activeTab
+    );
+    const tabs: ("config" | "generation")[] = ["config", "generation"];
+    return (
+      <div className="modal-overlay">
+        <div className="modal-content" style={{ maxWidth: 900 }}>
+          <h3>Config Builder · {model.model_name}</h3>
+          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+            {tabs.map((tab) => (
+              <button
+                key={tab}
+                className="btn"
+                style={{
+                  background: activeTab === tab ? "#2563eb" : "transparent",
+                  border:
+                    activeTab === tab
+                      ? "1px solid rgba(255,255,255,0.2)"
+                      : "1px solid rgba(255,255,255,0.1)",
+                }}
+                onClick={() =>
+                  setConfigBuilderModal({ model, activeTab: tab })
+                }
+              >
+                {tab === "config" ? "config.json" : "generation_config"}
+              </button>
+            ))}
+            <button
+              className="btn"
+              onClick={() =>
+                handleConfigTestFormSubmit(undefined, model.id, activeTab)
+              }
+            >
+              New {activeTab === "config" ? "config" : "generation"} test
+            </button>
+          </div>
+          <div style={{ maxHeight: 360, overflow: "auto" }}>
+            {tests.length === 0 ? (
+              <p className="muted">No tests for this config yet.</p>
+            ) : (
+              <ul style={{ listStyle: "none", padding: 0 }}>
+                {tests.map((test) => (
+                  <li
+                    key={test.id}
+                    style={{
+                      borderBottom: "1px solid rgba(255,255,255,0.05)",
+                      padding: "8px 0",
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        gap: 8,
+                      }}
+                    >
+                      <div>
+                        <strong>{test.name}</strong>{" "}
+                        <span className="muted">{test.load_status}</span>
+                        {test.description && (
+                          <p className="muted" style={{ margin: 0 }}>
+                            {test.description}
+                          </p>
+                        )}
+                      </div>
+                      <button
+                        className="btn"
+                        onClick={() => openConfigTestModal(model.id, test.id)}
+                      >
+                        Edit
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <div className="modal-actions">
+            <button className="btn" onClick={() => setConfigBuilderModal(null)}>
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const renderConfigTestModal = () => {
     if (!configTestModal) return null;
     const { modelId, test } = configTestModal;
+    const defaultsKey = `${modelId}-${test.config_type}`;
+    const defaultsMap = configDefaultsCache[defaultsKey] ?? {};
     return (
       <div className="modal-overlay">
         <div className="modal-content">
@@ -3893,17 +4114,36 @@ export default function Dashboard({
                 {test.entries.map((entry) => (
                   <tr key={entry.id}>
                     <td>
-                      <input
-                        type="checkbox"
-                        checked={entry.inherit_default === 1}
-                        onChange={(e) =>
-                          handleToggleConfigEntryDefault(
-                            modelId,
-                            entry.id,
-                            e.target.checked
-                          )
-                        }
-                      />
+                      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                        <label className="muted" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <input
+                            type="checkbox"
+                            checked={entry.active === 1}
+                            onChange={(e) =>
+                              handleToggleConfigEntryDefault(
+                                modelId,
+                                entry.id,
+                                entry.inherit_default === 1
+                              )
+                            }
+                          />
+                          Active
+                        </label>
+                        <label className="muted" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <input
+                            type="checkbox"
+                            checked={entry.inherit_default === 1}
+                            onChange={(e) =>
+                              handleToggleConfigEntryDefault(
+                                modelId,
+                                entry.id,
+                                e.target.checked
+                              )
+                            }
+                          />
+                          Use default
+                        </label>
+                      </div>
                     </td>
                     <td>
                       <strong>{entry.json_path}</strong>
@@ -3915,7 +4155,6 @@ export default function Dashboard({
                     </td>
                     <td>
                       <input
-                        disabled={entry.inherit_default === 1}
                         value={configEntryDrafts[entry.id] ?? ""}
                         onChange={(e) =>
                           setConfigEntryDrafts((prev) => ({
@@ -3925,21 +4164,37 @@ export default function Dashboard({
                         }
                         style={{ width: "100%" }}
                       />
+                      <p className="muted" style={{ margin: "4px 0 0" }}>
+                        Default: {defaultsMap[entry.json_path] ?? "(unknown)"}
+                      </p>
                     </td>
                     <td>
-                      <button
-                        className="btn"
-                        disabled={entry.inherit_default === 1}
-                        onClick={() =>
-                          handleSaveConfigEntry(
-                            modelId,
-                            entry.id,
-                            configEntryDrafts[entry.id] ?? ""
-                          )
-                        }
-                      >
-                        Save
-                      </button>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <button
+                          className="btn"
+                          onClick={() =>
+                            handleSaveConfigEntry(
+                              modelId,
+                              entry,
+                              configEntryDrafts[entry.id] ?? ""
+                            )
+                          }
+                        >
+                          Save
+                        </button>
+                        <button
+                          className="btn"
+                          onClick={() =>
+                            handleRestoreDefault(
+                              modelId,
+                              entry,
+                              defaultsMap[entry.json_path]
+                            )
+                          }
+                        >
+                          Restore
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -4073,6 +4328,7 @@ export default function Dashboard({
       {renderModelInfoModal()}
       {renderStagedMetadataModal()}
       {renderConfigModal()}
+      {renderConfigBuilderModal()}
       {renderConfigTestModal()}
     </div>
   );

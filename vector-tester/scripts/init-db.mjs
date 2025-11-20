@@ -194,6 +194,43 @@ CREATE TABLE IF NOT EXISTS model_config_entries (
 CREATE INDEX IF NOT EXISTS idx_model_config_entries_file
   ON model_config_entries(config_file_id);
 
+CREATE TABLE IF NOT EXISTS model_config_tests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  model_test_id INTEGER NOT NULL,
+  base_config_file_id INTEGER NOT NULL,
+  config_type TEXT NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT,
+  load_status TEXT NOT NULL DEFAULT 'pending',
+  load_notes TEXT,
+  last_tested_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (model_test_id) REFERENCES models_test(id) ON DELETE CASCADE,
+  FOREIGN KEY (base_config_file_id) REFERENCES model_config_files(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS model_config_test_entries (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  config_test_id INTEGER NOT NULL,
+  active INTEGER NOT NULL DEFAULT 1,
+  json_path TEXT NOT NULL,
+  inherit_default INTEGER NOT NULL DEFAULT 1,
+  value_text TEXT,
+  value_json TEXT,
+  data_type TEXT,
+  notes TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (config_test_id) REFERENCES model_config_tests(id) ON DELETE CASCADE,
+  UNIQUE(config_test_id, json_path)
+);
+
+CREATE INDEX IF NOT EXISTS idx_model_config_tests_model
+  ON model_config_tests(model_test_id);
+CREATE INDEX IF NOT EXISTS idx_model_config_test_entries_test
+  ON model_config_test_entries(config_test_id);
+
 CREATE TABLE IF NOT EXISTS swagger_endpoints (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   method TEXT NOT NULL,

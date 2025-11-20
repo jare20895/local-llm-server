@@ -168,6 +168,32 @@ curl -X POST http://localhost:4173/api/models/huggingface/config \
 
 Behind the scenes this runs `vector-tester/scripts/sync_hf_configs.py`, which downloads the JSON files, hashes them, flattens the keys, associates them with any known `model_parameters`, and prunes obsolete paths. View the captured defaults from the “Models Staged for Testing” list via the **View Config Defaults** button, or hit `GET /api/models/configs/{model_test_id}` for automation.
 
+### Config Builder CLI
+
+Once defaults are captured, you can script updates to config tests (toggling inheritance or overriding values) using `scripts/config_test_cli.py`:
+
+```bash
+# List config tests (optional --model-test-id filter)
+python3 vector-tester/scripts/config_test_cli.py list --model-test-id 2
+
+# Force rope_scaling.type to "linear" on test id 5
+python3 vector-tester/scripts/config_test_cli.py set \
+  --test-id 5 \
+  --path rope_scaling.type \
+  --inherit false \
+  --value linear
+
+# Revert to default for kv_cache.enable
+python3 vector-tester/scripts/config_test_cli.py set \
+  --test-id 5 \
+  --path kv_cache.enable \
+  --inherit true
+```
+
+The same APIs are surfaced in the Config Builder UI from each staged model (button next to “View Config Defaults”), where configs are grouped by `config.json` vs `generation_config.json`.
+
+- Each staged model card exposes **Config Builder** (plus quick shortcuts for each config file). Opening the builder auto-creates a `CFG### <Model>` record if none exists and shows tabs for `config.json` vs `generation_config.json`. Within each tab you can flip entries back to defaults or edit overrides inline before running a test.
+
 ### Local Development
 
 ```bash

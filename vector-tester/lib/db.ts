@@ -216,6 +216,7 @@ CREATE TABLE IF NOT EXISTS model_config_test_entries (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   config_test_id INTEGER NOT NULL,
   json_path TEXT NOT NULL,
+  active INTEGER NOT NULL DEFAULT 1,
   inherit_default INTEGER NOT NULL DEFAULT 1,
   value_text TEXT,
   value_json TEXT,
@@ -818,6 +819,7 @@ export function getConfigTestEntries(
 
 export function updateConfigTestEntry(data: {
   id: number;
+  active?: boolean;
   inherit_default?: boolean;
   value_text?: string | null;
   value_json?: string | null;
@@ -825,7 +827,8 @@ export function updateConfigTestEntry(data: {
 }): ModelConfigTestEntry {
   const stmt = db.prepare(
     `UPDATE model_config_test_entries
-     SET inherit_default = COALESCE(@inherit_default, inherit_default),
+     SET active = COALESCE(@active, active),
+         inherit_default = COALESCE(@inherit_default, inherit_default),
          value_text = @value_text,
          value_json = @value_json,
          notes = @notes,
@@ -834,6 +837,8 @@ export function updateConfigTestEntry(data: {
   );
   stmt.run({
     id: data.id,
+    active:
+      data.active === undefined ? undefined : data.active ? 1 : 0,
     inherit_default:
       data.inherit_default === undefined
         ? undefined
@@ -855,6 +860,7 @@ export function updateConfigTestEntry(data: {
 export function addConfigTestEntry(data: {
   config_test_id: number;
   json_path: string;
+  active?: boolean;
   value_text?: string | null;
   value_json?: string | null;
   data_type?: string | null;
@@ -862,12 +868,13 @@ export function addConfigTestEntry(data: {
 }): ModelConfigTestEntry {
   const stmt = db.prepare(
     `INSERT INTO model_config_test_entries
-      (config_test_id, json_path, inherit_default, value_text, value_json, data_type, notes)
-     VALUES (@config_test_id, @json_path, 0, @value_text, @value_json, @data_type, @notes)`
+      (config_test_id, json_path, active, inherit_default, value_text, value_json, data_type, notes)
+     VALUES (@config_test_id, @json_path, @active, 0, @value_text, @value_json, @data_type, @notes)`
   );
   const info = stmt.run({
     config_test_id: data.config_test_id,
     json_path: data.json_path,
+    active: data.active === false ? 0 : 1,
     value_text: data.value_text ?? null,
     value_json: data.value_json ?? null,
     data_type: data.data_type ?? null,
