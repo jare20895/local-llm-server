@@ -147,6 +147,8 @@ Only elements flagged as **active** and not marked as **detailed** or **extensiv
 
 Use the Metadata tab to flip each element between Active/Inactive and to decide whether a key should be stored only when the Detailed or Extensive buttons are requested.
 
+The scraper automatically forces critical compatibility/performance items (license, tags, inference parameters, deployment notes, etc.) into the **Active** tier so they are always captured, while everything else respects the flag settings you configure from the Metadata tab.
+
 > Requirements: ensure `python3` plus the `huggingface-hub` and `PyYAML` packages are installed on the machine/container running Vector-Tester (the Docker images now bake these in automatically).
 
 ### Local Development

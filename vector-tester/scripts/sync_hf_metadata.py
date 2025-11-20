@@ -70,6 +70,38 @@ LINK_RULES = [
     ("huggingface", "Model Overview", "Model_Summary"),
 ]
 
+CRITICAL_SEMANTIC_ROLES = {
+    "License",
+    "Tags",
+    "Parameters",
+    "Usage",
+    "Intended_Use",
+    "Deployment_Notes",
+    "Performance",
+    "Evaluation_Results",
+    "Localization",
+    "Safety_Ethics",
+    "Model_Summary",
+}
+
+CRITICAL_CATEGORIES = {
+    "Metadata",
+    "Usage",
+    "Deployment",
+    "Performance",
+    "Localization",
+}
+
+CRITICAL_PATH_KEYWORDS = [
+    "inference",
+    "parameter",
+    "hardware",
+    "gpu",
+    "system",
+    "environment",
+    "cache",
+]
+
 
 @dataclass
 class Entry:
@@ -443,6 +475,7 @@ def ensure_meta(conn: sqlite3.Connection, entry: Entry) -> Tuple[sqlite3.Row, bo
     description = row["description"] if row else None
     category = entry.category
     semantic = entry.semantic_role
+    critical = is_critical_entry(entry)
     if row:
         conn.execute(
             """
@@ -474,6 +507,8 @@ def ensure_meta(conn: sqlite3.Connection, entry: Entry) -> Tuple[sqlite3.Row, bo
     active, detailed, extensive = DEFAULT_FLAG_MAP.get(
         entry.element_type, (1, 0, 0)
     )
+    if critical:
+        active = 1
     cursor = conn.execute(
         """
         INSERT INTO huggingface_meta
@@ -502,6 +537,15 @@ def ensure_meta(conn: sqlite3.Connection, entry: Entry) -> Tuple[sqlite3.Row, bo
     return fresh, True
 
 
+def is_critical_entry(entry: Entry) -> bool:
+    canonical = entry.canonical_path.lower()
+    if entry.semantic_role and entry.semantic_role in CRITICAL_SEMANTIC_ROLES:
+        return True
+    if entry.category and entry.category in CRITICAL_CATEGORIES:
+        return True
+    return any(keyword in canonical for keyword in CRITICAL_PATH_KEYWORDS)
+
+
 def should_capture(meta_row: sqlite3.Row, detail_level: str) -> bool:
     if meta_row["active"] != 1:
         return False
@@ -517,7 +561,7 @@ def persist_entries(
     model_test_id: int,
     entries: List[Entry],
     detail_level: str,
-) -> Tuple[int, int]:
+) -> Tuple[int, int, int]:
     conn.execute(
         "DELETE FROM models_test_huggingface WHERE model_test_id = ?",
         (model_test_id,),
@@ -551,8 +595,17 @@ def persist_entries(
             ),
         )
         inserted += 1
+    pruned_cursor = conn.execute(
+        """
+        DELETE FROM models_test_huggingface
+        WHERE meta_id IN (
+          SELECT id FROM huggingface_meta WHERE active = 0
+        )
+        """
+    )
+    pruned = pruned_cursor.rowcount
     conn.commit()
-    return inserted, meta_updates
+    return inserted, meta_updates, pruned
 
 
 def determine_repo_id(row: sqlite3.Row, explicit: Optional[str]) -> Optional[str]:
@@ -650,7 +703,7 @@ def main() -> int:
         print(str(exc), file=sys.stderr)
         return 5
     entries = collect_entries(readme_text)
-    inserted, created = persist_entries(
+    inserted, created, pruned = persist_entries(
         conn, args.model_test_id, entries, args.detail_level
     )
     summary = {
@@ -659,6 +712,7 @@ def main() -> int:
         "repo_id": repo_id,
         "total_entries": inserted,
         "new_meta": created,
+        "pruned_inactive": pruned,
         "hf_card_sha": info.sha,
         "detail_level": args.detail_level,
         "timestamp": datetime.now(timezone.utc).isoformat(),

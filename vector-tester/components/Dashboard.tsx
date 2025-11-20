@@ -10,8 +10,49 @@ import type {
   SwaggerEndpoint,
   TestStep,
   HuggingfaceMeta,
+  ModelHuggingfaceRecord,
 } from "@/lib/db";
 import type { LlmStatus, ModelSummary } from "@/lib/llm";
+
+const metadataSourceDefinitions = [
+  {
+    id: "huggingface",
+    label: "HuggingFace Narrative",
+    description: "Markdown headings, sections, and prose from the model card.",
+  },
+  {
+    id: "json",
+    label: "YAML / JSON Config",
+    description: "Structured keys pulled from the model card front matter.",
+  },
+  {
+    id: "internals",
+    label: "Model Internals",
+    description: "Performance, deployment, usage, and training details.",
+  },
+  {
+    id: "other",
+    label: "Other / Uncategorized",
+    description: "Elements that do not map cleanly to the other buckets yet.",
+  },
+] as const;
+
+type MetadataSourceId = (typeof metadataSourceDefinitions)[number]["id"];
+
+const INTERNAL_CATEGORY_SET = new Set([
+  "Performance",
+  "Usage",
+  "Training",
+  "Deployment",
+  "Ethics & Safety",
+  "Localization",
+]);
+
+const JSON_HINTS = ["inference", "parameter", "config", "widget"];
+type CatalogEntry = HuggingfaceMeta & {
+  truncatedExample: string;
+  hasOverflow: boolean;
+};
 
 type SidebarItem = { label: string; anchor?: string; section?: string };
 
@@ -66,7 +107,28 @@ export default function Dashboard({
   const [metaRefreshing, setMetaRefreshing] = useState(false);
   const [metaUpdating, setMetaUpdating] = useState<Record<number, boolean>>({});
   const [metaMessage, setMetaMessage] = useState<string | null>(null);
-  type MetaFlag = "active" | "detailed" | "extensive";
+  const [modelInfoModal, setModelInfoModal] = useState<ModelSummary | null>(null);
+  const [stagedMetadataModal, setStagedMetadataModal] = useState<{
+    copy: TestModelCopy;
+    entries: ModelHuggingfaceRecord[];
+  } | null>(null);
+  const [stagedMetadataLoadingId, setStagedMetadataLoadingId] = useState<number | null>(null);
+  const [stagedMetadataError, setStagedMetadataError] = useState<string | null>(null);
+  const [metadataModal, setMetadataModal] = useState<{
+    entry: HuggingfaceMeta;
+  } | null>(null);
+  type MetaFlag = keyof Pick<
+    HuggingfaceMeta,
+    "active" | "detailed" | "extensive"
+  >;
+  const flagConfigs: Record<
+    MetaFlag,
+    { on: string; off: string; color: string }
+  > = {
+    active: { on: "Active", off: "Inactive", color: "#16a34a" },
+    detailed: { on: "Detailed", off: "Basic", color: "#0ea5e9" },
+    extensive: { on: "Extensive", off: "Standard", color: "#a855f7" },
+  };
 
   const metadataStats = useMemo(() => {
     const total = metadata.length;
@@ -89,6 +151,71 @@ export default function Dashboard({
       );
     });
   }, [metadataFilter, metadata]);
+  const summarizeCategories = useCallback((entries: HuggingfaceMeta[]) => {
+    if (entries.length === 0) return "";
+    const counts = new Map<string, number>();
+    entries.forEach((entry) => {
+      const key = entry.category ?? "Uncategorized";
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    });
+    return Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([label, count]) => `${label} (${count})`)
+      .join(", ");
+  }, []);
+  const classifyMetadataSource = useCallback(
+    (entry: HuggingfaceMeta): MetadataSourceId => {
+      const canonical = entry.canonical_path.toLowerCase();
+      if (entry.category && INTERNAL_CATEGORY_SET.has(entry.category)) {
+        return "internals";
+      }
+      if (
+        entry.element_type.startsWith("Markdown") ||
+        entry.element_type === "Model Card Section"
+      ) {
+        return "huggingface";
+      }
+      if (entry.element_type.startsWith("YAML")) {
+        return "json";
+      }
+      if (JSON_HINTS.some((hint) => canonical.includes(hint))) {
+        return "json";
+      }
+      return "other";
+    },
+    []
+  );
+  const truncateExample = (value: string | null) => {
+    if (!value) return "";
+    if (value.length <= 255) return value;
+    return `${value.slice(0, 252)}...`;
+  };
+  const metadataGroups = useMemo(() => {
+    const buckets: Record<MetadataSourceId, HuggingfaceMeta[]> = {
+      huggingface: [],
+      json: [],
+      internals: [],
+      other: [],
+    };
+    filteredMetadata.forEach((entry) => {
+      const bucket = classifyMetadataSource(entry);
+      buckets[bucket].push(entry);
+    });
+    return metadataSourceDefinitions.map((def) => {
+      const entries = buckets[def.id];
+      const enhanced = entries.map((entry) => ({
+        ...entry,
+        truncatedExample: truncateExample(entry.example_value ?? null),
+        hasOverflow: (entry.example_value ?? "").length > 255,
+      })) as CatalogEntry[];
+      return {
+        ...def,
+        entries: enhanced,
+        categorySummary: summarizeCategories(entries),
+      };
+    });
+  }, [filteredMetadata, classifyMetadataSource, summarizeCategories]);
   const [selectedModel, setSelectedModel] = useState(
     initialModels[0]?.model_name ?? ""
   );
@@ -460,6 +587,16 @@ export default function Dashboard({
     }
   };
 
+  const handleShowModelInfo = () => {
+    if (!selectedModel) return;
+    const model = models.find((item) => item.model_name === selectedModel);
+    if (model) {
+      setModelInfoModal(model);
+    } else {
+      alert("Model details not found in registry snapshot.");
+    }
+  };
+
   const handleHuggingfaceSync = async (
     detailLevel: "basic" | "detailed" | "extensive" = "basic"
   ) => {
@@ -509,6 +646,28 @@ export default function Dashboard({
       );
     } finally {
       setHuggingfaceSyncing(false);
+    }
+  };
+
+  const handleShowStagedMetadata = async (copy: TestModelCopy) => {
+    setStagedMetadataError(null);
+    setStagedMetadataLoadingId(copy.id);
+    try {
+      const res = await fetch(`/api/models/huggingface/${copy.id}`);
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to load metadata");
+      }
+      setStagedMetadataModal({
+        copy,
+        entries: (data.metadata as ModelHuggingfaceRecord[]) ?? [],
+      });
+    } catch (error) {
+      setStagedMetadataError(
+        `Metadata load failed: ${(error as Error).message}`
+      );
+    } finally {
+      setStagedMetadataLoadingId(null);
     }
   };
 
@@ -1465,30 +1624,49 @@ export default function Dashboard({
             Cached {new Date(copy.cached_at).toLocaleString()} · Status:{" "}
             {copy.status}
           </p>
+          <button
+            className="btn"
+            style={{ marginTop: 6 }}
+            onClick={() => handleShowStagedMetadata(copy)}
+            disabled={stagedMetadataLoadingId === copy.id}
+          >
+            {stagedMetadataLoadingId === copy.id ? "Loading..." : "View Metadata"}
+          </button>
         </div>
       ))}
+      {stagedMetadataError && (
+        <p className="muted" style={{ marginTop: 8 }}>
+          {stagedMetadataError}
+        </p>
+      )}
     </div>
   );
 
   const renderRegistryTab = () => (
     <>
       <section className="card">
-        <h2>Model Offline Preparation</h2>
+        <h2>Stage Test Preparation</h2>
         <div className="form-group">
           <label>Model to stage</label>
-          <select
-            value={selectedModel}
-            onChange={(e) => setSelectedModel(e.target.value)}
-          >
-            {models.map((model) => (
-              <option key={model.id} value={model.model_name}>
-                {model.model_name}
-              </option>
-            ))}
-          </select>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <select
+              value={selectedModel}
+              onChange={(e) => setSelectedModel(e.target.value)}
+              style={{ flex: "1 1 250px" }}
+            >
+              {models.map((model) => (
+                <option key={model.id} value={model.model_name}>
+                  {model.model_name}
+                </option>
+              ))}
+            </select>
+            <button className="btn" type="button" onClick={handleShowModelInfo}>
+              Model Details
+            </button>
+          </div>
         </div>
         <button className="btn" onClick={handleOfflineSyncRequest} disabled={!selectedModel}>
-          Request Offline Copy
+          Stage Test
         </button>
         <div
           style={{
@@ -1536,10 +1714,6 @@ export default function Dashboard({
         </p>
       </section>
       <section className="card">
-        <h2>Registry Snapshot</h2>
-        {renderModelsList()}
-      </section>
-      <section className="card">
         <h2>Models Staged for Testing</h2>
         {renderLocalCopies()}
       </section>
@@ -1554,24 +1728,26 @@ export default function Dashboard({
           Toggle inclusion flags per element type to control what gets stored for
           each HuggingFace model card.
         </p>
-        <div className="grid grid-3">
-          <div>
-            <p className="muted">Total elements</p>
-            <p>{metadataStats.total}</p>
-          </div>
-          <div>
-            <p className="muted">Active</p>
-            <p>{metadataStats.active}</p>
-          </div>
-          <div>
-            <p className="muted">Detailed</p>
-            <p>{metadataStats.detailed}</p>
-          </div>
-          <div>
-            <p className="muted">Extensive</p>
-            <p>{metadataStats.extensive}</p>
-          </div>
-        </div>
+        <table className="table" style={{ marginTop: 12 }}>
+          <tbody>
+            <tr>
+              <td className="muted" style={{ width: "25%" }}>
+                Total elements
+              </td>
+              <td>{metadataStats.total}</td>
+              <td className="muted" style={{ width: "25%" }}>
+                Active
+              </td>
+              <td>{metadataStats.active}</td>
+            </tr>
+            <tr>
+              <td className="muted">Detailed</td>
+              <td>{metadataStats.detailed}</td>
+              <td className="muted">Extensive</td>
+              <td>{metadataStats.extensive}</td>
+            </tr>
+          </tbody>
+        </table>
         <div className="form-group" style={{ marginTop: 12 }}>
           <label htmlFor="meta-filter">Filter catalog</label>
           <input
@@ -1590,116 +1766,152 @@ export default function Dashboard({
           </p>
         )}
       </section>
-      <section className="card">
-        <h2>Element Catalog</h2>
-        {filteredMetadata.length === 0 ? (
-          <p className="muted">No metadata entries match the current filter.</p>
-        ) : (
-          <div className="grid grid-2">
-            {filteredMetadata.map((entry) => {
-              const busy = Boolean(metaUpdating[entry.id]);
-              return (
-                <div
-                  key={entry.id}
-                  style={{
-                    border: "1px solid rgba(255,255,255,0.08)",
-                    borderRadius: 8,
-                    padding: 12,
-                  }}
-                >
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                      gap: 8,
-                      flexWrap: "wrap",
-                    }}
-                  >
-                    <strong style={{ wordBreak: "break-all" }}>
-                      {entry.canonical_path}
-                    </strong>
-                    <span className="muted">{entry.element_type}</span>
-                  </div>
-                  <p className="muted" style={{ marginTop: 4 }}>
-                    {entry.category ?? "Uncategorized"} ·{" "}
-                    {entry.semantic_role ?? "No semantic role"}
-                  </p>
-                  {entry.example_value && (
-                    <pre
-                      style={{
-                        fontSize: 12,
-                        background: "rgba(255,255,255,0.03)",
-                        padding: 8,
-                        borderRadius: 4,
-                        maxHeight: 120,
-                        overflow: "auto",
-                      }}
-                    >
-                      {entry.example_value}
-                    </pre>
-                  )}
-                  <div
-                    style={{
-                      display: "flex",
-                      gap: 8,
-                      flexWrap: "wrap",
-                      marginTop: 8,
-                    }}
-                  >
-                    <button
-                      className="btn"
-                      style={{
-                        background: entry.active === 1 ? "#16a34a" : "transparent",
-                        borderColor:
-                          entry.active === 1
-                            ? "rgba(0,0,0,0)"
-                            : "rgba(255,255,255,0.2)",
-                        opacity: busy ? 0.6 : 1,
-                      }}
-                      disabled={busy}
-                      onClick={() => toggleMetaFlag(entry, "active")}
-                    >
-                      {entry.active === 1 ? "Active" : "Inactive"}
-                    </button>
-                    <button
-                      className="btn"
-                      style={{
-                        background: entry.detailed === 1 ? "#0ea5e9" : "transparent",
-                        borderColor:
-                          entry.detailed === 1
-                            ? "rgba(0,0,0,0)"
-                            : "rgba(255,255,255,0.2)",
-                        opacity: busy ? 0.6 : 1,
-                      }}
-                      disabled={busy}
-                      onClick={() => toggleMetaFlag(entry, "detailed")}
-                    >
-                      {entry.detailed === 1 ? "Detailed" : "Basic"}
-                    </button>
-                    <button
-                      className="btn"
-                      style={{
-                        background:
-                          entry.extensive === 1 ? "#a855f7" : "transparent",
-                        borderColor:
-                          entry.extensive === 1
-                            ? "rgba(0,0,0,0)"
-                            : "rgba(255,255,255,0.2)",
-                        opacity: busy ? 0.6 : 1,
-                      }}
-                      disabled={busy}
-                      onClick={() => toggleMetaFlag(entry, "extensive")}
-                    >
-                      {entry.extensive === 1 ? "Extensive" : "Standard"}
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
+      {metadataGroups.map((group) => (
+        <section className="card" key={group.id}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              flexWrap: "wrap",
+              gap: 8,
+            }}
+          >
+            <h2>{group.label}</h2>
+            <span className="muted">{group.entries.length} elements</span>
           </div>
-        )}
-      </section>
+          <p className="muted">{group.description}</p>
+          {group.entries.length > 0 && group.categorySummary && (
+            <p className="muted" style={{ fontSize: 12 }}>
+              Top categories: {group.categorySummary}
+            </p>
+          )}
+          {group.entries.length === 0 ? (
+            <p className="muted">
+              No metadata elements currently fall into this source bucket.
+            </p>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table
+                style={{
+                  width: "100%",
+                  borderCollapse: "collapse",
+                  fontSize: 14,
+                }}
+              >
+                <thead>
+                  <tr>
+                    <th style={{ textAlign: "left", padding: "8px 4px" }}>
+                      Element
+                    </th>
+                    <th style={{ textAlign: "left", padding: "8px 4px" }}>
+                      Category / Role
+                    </th>
+                    <th style={{ textAlign: "left", padding: "8px 4px" }}>
+                      Flags
+                    </th>
+                    <th style={{ textAlign: "left", padding: "8px 4px" }}>
+                      Example / Notes
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {group.entries.map((entry) => {
+                    const busy = Boolean(metaUpdating[entry.id]);
+                    const truncatedElement =
+                      entry.canonical_path.length > 75
+                        ? `${entry.canonical_path.slice(0, 72)}...`
+                        : entry.canonical_path;
+                    const truncatedCategory =
+                      (entry.category ?? "Uncategorized").length > 25
+                        ? `${(entry.category ?? "Uncategorized").slice(0, 22)}...`
+                        : entry.category ?? "Uncategorized";
+                    const truncatedRole =
+                      (entry.semantic_role ?? "No semantic role").length > 25
+                        ? `${(entry.semantic_role ?? "No semantic role").slice(0, 22)}...`
+                        : entry.semantic_role ?? "No semantic role";
+                    return (
+                      <tr
+                        key={`${group.id}-${entry.id}`}
+                        style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}
+                      >
+                        <td style={{ verticalAlign: "top", padding: "8px 4px" }}>
+                          <strong style={{ display: "block" }}>{truncatedElement}</strong>
+                          <p className="muted" style={{ margin: "2px 0 0", fontSize: 12 }}>
+                            {entry.element_type}
+                          </p>
+                        </td>
+                        <td style={{ verticalAlign: "top", padding: "8px 4px" }}>
+                          <div>
+                            <strong>{truncatedCategory}</strong>
+                          </div>
+                          <p className="muted" style={{ margin: "2px 0 0", fontSize: 12 }}>
+                            {truncatedRole}
+                          </p>
+                        </td>
+                        <td style={{ verticalAlign: "top", padding: "8px 4px" }}>
+                          <div style={{ display: "flex", gap: 6 }}>
+                            {(Object.keys(flagConfigs) as MetaFlag[]).map((flag) => {
+                              const config = flagConfigs[flag];
+                              const enabled = (entry[flag] as number) === 1;
+                              return (
+                                <button
+                                  key={`${entry.id}-${flag}`}
+                                  className="btn"
+                                  style={{
+                                    background: enabled ? config.color : "transparent",
+                                    borderColor: enabled
+                                      ? "rgba(0,0,0,0)"
+                                      : "rgba(255,255,255,0.2)",
+                                    opacity: busy ? 0.6 : 1,
+                                    fontSize: 12,
+                                    padding: "4px 12px",
+                                  }}
+                                  disabled={busy}
+                                  onClick={() => toggleMetaFlag(entry, flag)}
+                                >
+                                  {config.on}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </td>
+                        <td style={{ verticalAlign: "top", padding: "8px 4px" }}>
+                          {entry.truncatedExample ? (
+                            <div>
+                              <span style={{ display: "block", fontSize: 12 }}>
+                                {entry.truncatedExample}
+                              </span>
+                              {entry.hasOverflow && (
+                                <button
+                                  className="btn"
+                                  style={{
+                                    marginTop: 6,
+                                    background: "transparent",
+                                    border: "1px solid rgba(255,255,255,0.3)",
+                                    color: "var(--text-primary)",
+                                    fontSize: 12,
+                                    padding: "4px 10px",
+                                  }}
+                                  onClick={() => setMetadataModal({ entry })}
+                                >
+                                  View full
+                                </button>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="muted">No sample recorded.</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      ))}
     </>
   );
 
@@ -2861,6 +3073,145 @@ export default function Dashboard({
     return null;
   };
 
+  const renderMetadataModal = () => {
+    if (!metadataModal) return null;
+    const { entry } = metadataModal;
+    return (
+      <div className="modal-overlay">
+        <div className="modal-content">
+          <h3>Metadata Details</h3>
+          <p className="muted" style={{ fontSize: 12 }}>
+            {entry.canonical_path} · {entry.element_type}
+          </p>
+          <section className="card" style={{ marginTop: 12 }}>
+            <p>
+              <strong>Category:</strong> {entry.category ?? "Uncategorized"}
+            </p>
+            <p>
+              <strong>Semantic Role:</strong>{" "}
+              {entry.semantic_role ?? "None"}
+            </p>
+            <p>
+              <strong>Example / Notes:</strong>
+            </p>
+            <pre
+              style={{
+                fontSize: 13,
+                background: "rgba(255,255,255,0.05)",
+                padding: 12,
+                borderRadius: 6,
+                maxHeight: 260,
+                overflow: "auto",
+              }}
+            >
+              {entry.example_value ?? "(no sample provided)"}
+            </pre>
+          </section>
+          <div className="modal-actions">
+            <button className="btn" onClick={() => setMetadataModal(null)}>
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderModelInfoModal = () => {
+    if (!modelInfoModal) return null;
+    const info = modelInfoModal;
+    return (
+      <div className="modal-overlay">
+        <div className="modal-content">
+          <h3>{info.model_name}</h3>
+          <p className="muted" style={{ fontSize: 12 }}>
+            Registry details
+          </p>
+          <section className="card" style={{ marginTop: 12 }}>
+            <p>
+              <strong>HF Path:</strong> {info.hf_path ?? "N/A"}
+            </p>
+            <p>
+              <strong>Cache Location:</strong> {info.cache_location ?? "N/A"}
+            </p>
+            <p>
+              <strong>Compatibility:</strong> {info.compatibility_status ?? "Unknown"}
+            </p>
+            {info.compatibility_notes && (
+              <p>
+                <strong>Notes:</strong> {info.compatibility_notes}
+              </p>
+            )}
+          </section>
+          <div className="modal-actions">
+            <button className="btn" onClick={() => setModelInfoModal(null)}>
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderStagedMetadataModal = () => {
+    if (!stagedMetadataModal) return null;
+    const { copy, entries } = stagedMetadataModal;
+    return (
+      <div className="modal-overlay">
+        <div className="modal-content">
+          <h3>Metadata for {copy.model_name}</h3>
+          <p className="muted" style={{ fontSize: 12 }}>
+            {entries.length} elements captured
+          </p>
+          <div style={{ maxHeight: 400, overflow: "auto", marginTop: 12 }}>
+            {entries.length === 0 ? (
+              <p className="muted">No metadata recorded yet. Run a sync first.</p>
+            ) : (
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Element</th>
+                    <th>Category</th>
+                    <th>Value</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {entries.map((entry) => (
+                    <tr key={entry.id}>
+                      <td>
+                        <strong>{entry.canonical_path}</strong>
+                        <p className="muted" style={{ margin: 0, fontSize: 12 }}>
+                          {entry.element_type}
+                        </p>
+                      </td>
+                      <td>
+                        <p style={{ margin: 0 }}>
+                          {entry.category ?? "Uncategorized"}
+                        </p>
+                        <p className="muted" style={{ margin: 0, fontSize: 12 }}>
+                          {entry.semantic_role ?? "No semantic role"}
+                        </p>
+                      </td>
+                      <td style={{ fontSize: 12 }}>
+                        {entry.value_text ?? "(no text value)"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+          <div className="modal-actions">
+            <button className="btn" onClick={() => setStagedMetadataModal(null)}>
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+
   const renderTabContent = () => {
     switch (activeTab) {
       case "registry":
@@ -2938,6 +3289,9 @@ export default function Dashboard({
         <div className="tab-content">{renderTabContent()}</div>
       </div>
       {renderModal()}
+      {renderMetadataModal()}
+      {renderModelInfoModal()}
+      {renderStagedMetadataModal()}
     </div>
   );
 }
