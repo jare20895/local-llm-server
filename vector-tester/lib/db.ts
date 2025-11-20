@@ -185,6 +185,16 @@ function ensureColumn(table: string, column: string, definition: string) {
   }
 }
 
+function ensureTimestampColumn(table: string, column: string) {
+  const columns = db
+    .prepare(`PRAGMA table_info(${table})`)
+    .all() as TableColumnInfo[];
+  if (!columns.some((col) => col.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} TEXT`);
+    db.exec(`UPDATE ${table} SET ${column} = datetime('now')`);
+  }
+}
+
 ensureColumn(
   "log_events",
   "model_id",
@@ -195,16 +205,8 @@ ensureColumn(
   "test_profile_id",
   "INTEGER REFERENCES test_profiles(id)"
 );
-ensureColumn(
-  "models_test_huggingface",
-  "created_at",
-  "TEXT NOT NULL DEFAULT (datetime('now'))"
-);
-ensureColumn(
-  "models_test_huggingface",
-  "updated_at",
-  "TEXT NOT NULL DEFAULT (datetime('now'))"
-);
+ensureTimestampColumn("models_test_huggingface", "created_at");
+ensureTimestampColumn("models_test_huggingface", "updated_at");
 
 export type TestRun = {
   id: number;
