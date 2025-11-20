@@ -6,7 +6,7 @@ import re
 import sqlite3
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 try:
     from zoneinfo import ZoneInfo
 except ImportError:  # pragma: no cover
@@ -20,7 +20,7 @@ from huggingface_hub import HfApi, hf_hub_download
 try:
     LOCAL_TZ = ZoneInfo("America/New_York") if ZoneInfo else timezone.utc
 except Exception:
-    LOCAL_TZ = timezone.utc
+    LOCAL_TZ = timezone(timedelta(hours=-5))
 
 
 def current_timestamp() -> str:
