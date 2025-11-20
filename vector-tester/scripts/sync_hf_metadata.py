@@ -561,40 +561,116 @@ def persist_entries(
     model_test_id: int,
     entries: List[Entry],
     detail_level: str,
-) -> Tuple[int, int, int]:
-    conn.execute(
-        "DELETE FROM models_test_huggingface WHERE model_test_id = ?",
+) -> Tuple[int, int, int, int]:
+    existing_rows = conn.execute(
+        "SELECT * FROM models_test_huggingface WHERE model_test_id = ?",
         (model_test_id,),
-    )
+    ).fetchall()
+    existing_by_meta = {row["meta_id"]: row for row in existing_rows}
+    seen_meta_ids = set()
     inserted = 0
+    updated = 0
     meta_updates = 0
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+
     for entry in entries:
-        meta_row, created = ensure_meta(conn, entry)
-        if created:
+        meta_row, created_meta = ensure_meta(conn, entry)
+        if created_meta:
             meta_updates += 1
         if not should_capture(meta_row, detail_level):
             continue
+
+        seen_meta_ids.add(meta_row["id"])
+        existing = existing_by_meta.get(meta_row["id"])
+
+        payload = {
+            "canonical_path": entry.canonical_path,
+            "display_path": entry.display_path,
+            "element_type": entry.element_type,
+            "value_text": entry.value_text,
+            "value_json": entry.value_json,
+            "model_card_path": entry.model_card_path,
+            "model_card_section": entry.model_card_section,
+            "source_line": entry.source_line,
+        }
+
+        if existing:
+            changed = any(
+                existing[key] != payload[key]
+                for key in payload
+            )
+            if changed:
+                conn.execute(
+                    """
+                    UPDATE models_test_huggingface
+                    SET canonical_path = ?,
+                        display_path = ?,
+                        element_type = ?,
+                        value_text = ?,
+                        value_json = ?,
+                        model_card_path = ?,
+                        model_card_section = ?,
+                        source_line = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        payload["canonical_path"],
+                        payload["display_path"],
+                        payload["element_type"],
+                        payload["value_text"],
+                        payload["value_json"],
+                        payload["model_card_path"],
+                        payload["model_card_section"],
+                        payload["source_line"],
+                        now_iso,
+                        existing["id"],
+                    ),
+                )
+                updated += 1
+        else:
+            conn.execute(
+                """
+                INSERT INTO models_test_huggingface
+                  (model_test_id, meta_id, canonical_path, display_path, element_type,
+                   value_text, value_json, model_card_path, model_card_section, source_line,
+                   detected_at, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    model_test_id,
+                    meta_row["id"],
+                    payload["canonical_path"],
+                    payload["display_path"],
+                    payload["element_type"],
+                    payload["value_text"],
+                    payload["value_json"],
+                    payload["model_card_path"],
+                    payload["model_card_section"],
+                    payload["source_line"],
+                    now_iso,
+                    now_iso,
+                    now_iso,
+                ),
+            )
+            inserted += 1
+
+    stale_meta_ids = [
+        meta_id
+        for meta_id in existing_by_meta.keys()
+        if meta_id not in seen_meta_ids
+    ]
+    if stale_meta_ids:
+        placeholders = ",".join("?" for _ in stale_meta_ids)
         conn.execute(
-            """
-            INSERT INTO models_test_huggingface
-              (model_test_id, meta_id, canonical_path, display_path, element_type,
-               value_text, value_json, model_card_path, model_card_section, source_line)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            f"""
+            DELETE FROM models_test_huggingface
+            WHERE model_test_id = ? AND meta_id IN ({placeholders})
             """,
-            (
-                model_test_id,
-                meta_row["id"],
-                entry.canonical_path,
-                entry.display_path,
-                entry.element_type,
-                entry.value_text,
-                entry.value_json,
-                entry.model_card_path,
-                entry.model_card_section,
-                entry.source_line,
-            ),
+            (model_test_id, *stale_meta_ids),
         )
-        inserted += 1
+
     pruned_cursor = conn.execute(
         """
         DELETE FROM models_test_huggingface
@@ -605,7 +681,7 @@ def persist_entries(
     )
     pruned = pruned_cursor.rowcount
     conn.commit()
-    return inserted, meta_updates, pruned
+    return inserted, updated, pruned, meta_updates
 
 
 def determine_repo_id(row: sqlite3.Row, explicit: Optional[str]) -> Optional[str]:
@@ -703,15 +779,17 @@ def main() -> int:
         print(str(exc), file=sys.stderr)
         return 5
     entries = collect_entries(readme_text)
-    inserted, created, pruned = persist_entries(
+    inserted, updated_entries, pruned, meta_updates = persist_entries(
         conn, args.model_test_id, entries, args.detail_level
     )
     summary = {
         "model_test_id": args.model_test_id,
         "model_name": args.model_name or row["model_name"],
         "repo_id": repo_id,
-        "total_entries": inserted,
-        "new_meta": created,
+        "total_entries": inserted + updated_entries,
+        "new_entries": inserted,
+        "updated_entries": updated_entries,
+        "new_meta": meta_updates,
         "pruned_inactive": pruned,
         "hf_card_sha": info.sha,
         "detail_level": args.detail_level,

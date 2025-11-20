@@ -151,6 +151,8 @@ CREATE TABLE IF NOT EXISTS models_test_huggingface (
   model_card_section TEXT,
   source_line INTEGER,
   detected_at TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
   FOREIGN KEY (model_test_id) REFERENCES models_test(id) ON DELETE CASCADE,
   FOREIGN KEY (meta_id) REFERENCES huggingface_meta(id) ON DELETE CASCADE
 );
@@ -192,6 +194,16 @@ ensureColumn(
   "log_events",
   "test_profile_id",
   "INTEGER REFERENCES test_profiles(id)"
+);
+ensureColumn(
+  "models_test_huggingface",
+  "created_at",
+  "TEXT NOT NULL DEFAULT (datetime('now'))"
+);
+ensureColumn(
+  "models_test_huggingface",
+  "updated_at",
+  "TEXT NOT NULL DEFAULT (datetime('now'))"
 );
 
 export type TestRun = {
@@ -245,6 +257,8 @@ export type ModelHuggingfaceElement = {
   model_card_section: string | null;
   source_line: number | null;
   detected_at: string;
+  created_at: string;
+  updated_at: string;
 };
 
 export type ModelHuggingfaceRecord = ModelHuggingfaceElement & {

@@ -149,6 +149,8 @@ CREATE TABLE IF NOT EXISTS models_test_huggingface (
   model_card_section TEXT,
   source_line INTEGER,
   detected_at TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
   FOREIGN KEY (model_test_id) REFERENCES models_test(id) ON DELETE CASCADE,
   FOREIGN KEY (meta_id) REFERENCES huggingface_meta(id) ON DELETE CASCADE
 );
