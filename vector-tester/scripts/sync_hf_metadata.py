@@ -6,15 +6,21 @@ import re
 import sqlite3
 import sys
 from dataclasses import dataclass
-from datetime import datetime
-from zoneinfo import ZoneInfo
+from datetime import datetime, timezone
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # pragma: no cover
+    ZoneInfo = None  # type: ignore
 from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 from huggingface_hub import HfApi, hf_hub_download
 
 
-LOCAL_TZ = ZoneInfo("America/New_York")
+try:
+    LOCAL_TZ = ZoneInfo("America/New_York") if ZoneInfo else timezone.utc
+except Exception:
+    LOCAL_TZ = timezone.utc
 
 
 def current_timestamp() -> str:
