@@ -6,11 +6,19 @@ import re
 import sqlite3
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 from huggingface_hub import HfApi, hf_hub_download
+
+
+LOCAL_TZ = ZoneInfo("America/New_York")
+
+
+def current_timestamp() -> str:
+    return datetime.now(LOCAL_TZ).replace(microsecond=0).isoformat()
 
 
 DEFAULT_FLAG_MAP = {
@@ -469,7 +477,7 @@ def ensure_meta(conn: sqlite3.Connection, entry: Entry) -> Tuple[sqlite3.Row, bo
         "SELECT * FROM huggingface_meta WHERE canonical_path = ?",
         (entry.canonical_path,),
     ).fetchone()
-    now = datetime.now(timezone.utc).isoformat()
+    now = current_timestamp()
     example_value = entry.value_text
     parent_path = entry.parent_path
     description = row["description"] if row else None
@@ -572,7 +580,7 @@ def persist_entries(
     updated = 0
     meta_updates = 0
 
-    now_iso = datetime.now(timezone.utc).isoformat()
+    now_iso = current_timestamp()
 
     for entry in entries:
         meta_row, created_meta = ensure_meta(conn, entry)
@@ -793,7 +801,7 @@ def main() -> int:
         "pruned_inactive": pruned,
         "hf_card_sha": info.sha,
         "detail_level": args.detail_level,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": current_timestamp(),
     }
     print(json.dumps(summary))
     return 0
