@@ -894,21 +894,58 @@ export default function Dashboard({
     }
   };
 
-  const handleSaveConfigEntry = async (
+  const handleToggleConfigEntryActive = async (
     modelId: number,
-    entry: ModelConfigTestEntry,
-    value: string
+    entryId: number,
+    active: boolean
   ) => {
     try {
       const res = await fetch("/api/models/config-tests/entry", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          id: entry.id,
-          active: true,
-          value_text: value,
-          value_json: null,
+          id: entryId,
+          active,
         }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to update entry");
+      }
+      updateConfigTestsState(modelId, (tests) =>
+        tests.map((test) => ({
+          ...test,
+          entries: test.entries.map((entry) =>
+            entry.id === entryId ? data.entry : entry
+          ),
+        }))
+      );
+    } catch (error) {
+      setConfigTestsMessage(
+        `Entry update failed: ${(error as Error).message}`
+      );
+    }
+  };
+
+  const handleSaveConfigEntry = async (
+    modelId: number,
+    entry: ModelConfigTestEntry,
+    value: string,
+    options?: { inheritDefault?: boolean }
+  ) => {
+    try {
+      const payload: Record<string, unknown> = {
+        id: entry.id,
+        value_text: value,
+        value_json: null,
+      };
+      if (options?.inheritDefault !== undefined) {
+        payload.inherit_default = options.inheritDefault;
+      }
+      const res = await fetch("/api/models/config-tests/entry", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -981,10 +1018,9 @@ export default function Dashboard({
       setConfigTestsMessage("Default value unavailable for this field.");
       return;
     }
-    if (entry.inherit_default !== 1) {
-      await handleToggleConfigEntryDefault(modelId, entry.id, true);
-    }
-    await handleSaveConfigEntry(modelId, entry, defaultValue);
+    await handleSaveConfigEntry(modelId, entry, defaultValue, {
+      inheritDefault: true,
+    });
     setConfigEntryDrafts((prev) => ({ ...prev, [entry.id]: defaultValue }));
   };
 
@@ -4120,10 +4156,10 @@ const handleCreateConfigTest = async (opts: {
                             type="checkbox"
                             checked={entry.active === 1}
                             onChange={(e) =>
-                              handleToggleConfigEntryDefault(
+                              handleToggleConfigEntryActive(
                                 modelId,
                                 entry.id,
-                                entry.inherit_default === 1
+                                e.target.checked
                               )
                             }
                           />
@@ -4169,14 +4205,15 @@ const handleCreateConfigTest = async (opts: {
                       </p>
                     </td>
                     <td>
-                      <div style={{ display: "flex", gap: 6 }}>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                         <button
                           className="btn"
                           onClick={() =>
                             handleSaveConfigEntry(
                               modelId,
                               entry,
-                              configEntryDrafts[entry.id] ?? ""
+                              configEntryDrafts[entry.id] ?? "",
+                              { inheritDefault: false }
                             )
                           }
                         >
