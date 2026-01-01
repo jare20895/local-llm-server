@@ -6,7 +6,7 @@ services:
     working_dir: /app
     command: python main.py
     ports:
-      - "8001:8000"
+      - "18085:8000"
 
     # WSL GPU passthrough (device + required libraries)
     devices:
