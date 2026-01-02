@@ -7,21 +7,36 @@ on:
       - master
 
 permissions:
-  contents: write
+  contents: read
   pull-requests: write
 
 jobs:
   create_pr:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Create PR if missing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+          HEAD_BRANCH: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
 
-      - name: Create or update PR
-        uses: peter-evans/create-pull-request@v6
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          base: main
-          title: ${{ github.ref_name }}
-          body: |
-            Automated PR for branch `${{ github.ref_name }}`.
-          labels: auto-pr
+          if [ "$HEAD_BRANCH" = "$BASE_BRANCH" ]; then
+            echo "Head branch is base; skipping"
+            exit 0
+          fi
+
+          count=$(gh pr list --repo "$REPO" --head "$HEAD_BRANCH" --base "$BASE_BRANCH" --state open --json number --jq 'length')
+          if [ "$count" -gt 0 ]; then
+            echo "PR already exists"
+            exit 0
+          fi
+
+          gh pr create \
+            --repo "$REPO" \
+            --head "$HEAD_BRANCH" \
+            --base "$BASE_BRANCH" \
+            --title "$HEAD_BRANCH" \
+            --body "Automated PR for branch \`$HEAD_BRANCH\`."
