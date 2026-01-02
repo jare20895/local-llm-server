@@ -16,12 +16,17 @@ jobs:
     steps:
       - name: Create PR if missing
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.AUTO_PR_TOKEN }}
           BASE_BRANCH: ${{ github.event.repository.default_branch }}
           HEAD_BRANCH: ${{ github.ref_name }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "Missing AUTO_PR_TOKEN secret"
+            exit 1
+          fi
 
           if [ "$HEAD_BRANCH" = "$BASE_BRANCH" ]; then
             echo "Head branch is base; skipping"
